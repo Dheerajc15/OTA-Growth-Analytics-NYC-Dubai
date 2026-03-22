@@ -205,3 +205,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Data files (too large for Git — download fresh per README)
+data/raw/
+data/processed/
+
+# Output artifacts
+outputs/figures/
+outputs/reports/
+
+# Keep directory structure via .gitkeep
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!outputs/figures/.gitkeep
+!outputs/reports/.gitkeep
