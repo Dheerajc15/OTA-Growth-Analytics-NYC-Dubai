@@ -1,34 +1,41 @@
-# ── Core Data ──────────────────────────
+# ═══════════════════════════════════════════════════════════
+# OTA Growth Analytics: NYC → Dubai
+# Data Sources: Google Places, Google Trends, Aviation Edge,
+#               YouTube Data API, Simulated Fares
+# ═══════════════════════════════════════════════════════════
+
+# ── Core Data Science ──────────────────────────────────────
 pandas>=2.0.0
 numpy>=1.24.0
 scipy>=1.10.0
 
-# ── Time Series & Forecasting ─────────
+# ── Time Series & Forecasting ─────────────────────────────
 prophet>=1.1.4
 statsmodels>=0.14.0
 
-# ── Machine Learning & Clustering ─────
+# ── Machine Learning & Clustering ─────────────────────────
 scikit-learn>=1.3.0
 
-# ── NLP / Sentiment ───────────────────
+# ── NLP / Sentiment Analysis ──────────────────────────────
 vaderSentiment>=3.3.2
 textblob>=0.17.1
 nltk>=3.8.1
 
-# ── Data Collection ───────────────────
-pytrends>=4.9.2
-praw>=7.7.1
-requests>=2.31.0
+# ── Data Collection — APIs ────────────────────────────────
+requests>=2.31.0                     
+pytrends>=4.9.2                      
+google-api-python-client>=2.100.0    
 
-# ── Visualization ─────────────────────
+# ── Visualization ─────────────────────────────────────────
 matplotlib>=3.7.0
 seaborn>=0.12.0
 plotly>=5.15.0
 
-# ── Jupyter ───────────────────────────
+# ── Jupyter ────────────────────────────────────────────────
 jupyter>=1.0.0
 ipykernel>=6.25.0
+nbformat>=5.9.0
 
-# ── Utilities ─────────────────────────
+# ── Utilities ──────────────────────────────────────────────
 python-dotenv>=1.0.0
 tqdm>=4.65.0
