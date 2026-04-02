@@ -38,7 +38,7 @@ except ImportError:
 
 # ═══════════════════════════════════════════════════════════════
 # LOW-LEVEL API CALLS
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════��══════════
 
 def _check_api_key() -> bool:
     """Verify the Google Cloud API key is set."""
@@ -331,8 +331,13 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
     Simulates real market characteristics:
     - Dubai: higher prices, fewer listings, luxury-skewed, higher avg ratings
     - NYC: lower prices, massive listing density, wider spread, more reviews
+
+    FIXES:
+    - Bug 1: BUSINESS_STATUS uses proper 2-value choice
+    - Bug 2: AVG_REVIEW_RATING uses explicit conditional (no lambda ambiguity)
+    - Bug 3: NYC hotels now have realistic website URLs
     """
-    np.random.seed(seed)
+    rng = np.random.RandomState(seed)
 
     # ── Dubai Hotels ──
     n_dubai = 180
@@ -351,14 +356,20 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
 
     dubai_records = []
     for i in range(n_dubai):
-        neighborhood = np.random.choice(dubai_neighborhoods)
-        name = f"{np.random.choice(dubai_prefixes)} {neighborhood}"
+        neighborhood = rng.choice(dubai_neighborhoods)
+        name = f"{rng.choice(dubai_prefixes)} {neighborhood}"
 
         # Dubai is luxury-skewed: price_level 3-4 dominant
-        price_level = np.random.choice([1, 2, 3, 4], p=[0.05, 0.20, 0.40, 0.35])
+        price_level = rng.choice([1, 2, 3, 4], p=[0.05, 0.20, 0.40, 0.35])
         # Ratings: higher than NYC avg (luxury = better service)
-        rating = np.clip(np.random.normal(4.3, 0.4), 2.5, 5.0)
-        total_ratings = int(np.random.lognormal(7.0, 1.2))  # fewer reviews than NYC
+        rating = np.clip(rng.normal(4.3, 0.4), 2.5, 5.0)
+        total_ratings = int(rng.lognormal(7.0, 1.2))  # fewer reviews than NYC
+
+        # FIX Bug 1: Clean 2-value choice for BUSINESS_STATUS
+        business_status = rng.choice(
+            ["OPERATIONAL", "CLOSED_TEMPORARILY"],
+            p=[0.98, 0.02],
+        )
 
         dubai_records.append({
             "PLACE_ID": f"SYNTH_DUBAI_{i:04d}",
@@ -368,16 +379,13 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
             "TOTAL_RATINGS": total_ratings,
             "PRICE_LEVEL": price_level,
             "ADDRESS": f"{neighborhood}, Dubai, UAE",
-            "LAT": DUBAI_LAT + np.random.uniform(-0.08, 0.08),
-            "LNG": DUBAI_LNG + np.random.uniform(-0.08, 0.08),
-            "BUSINESS_STATUS": np.random.choice(
-                ["OPERATIONAL", "OPERATIONAL", "OPERATIONAL", "CLOSED_TEMPORARILY"],
-                p=[0.90, 0.04, 0.04, 0.02],
-            ),
+            "LAT": DUBAI_LAT + rng.uniform(-0.08, 0.08),
+            "LNG": DUBAI_LNG + rng.uniform(-0.08, 0.08),
+            "BUSINESS_STATUS": business_status,
             "TYPES": "lodging, point_of_interest, establishment",
             "NEIGHBORHOOD": neighborhood,
-            "NUM_PHOTOS": np.random.randint(3, 30),
-            "NUM_REVIEWS_FETCHED": min(5, max(0, int(np.random.normal(4, 1.5)))),
+            "NUM_PHOTOS": rng.randint(3, 30),
+            "NUM_REVIEWS_FETCHED": min(5, max(0, int(rng.normal(4, 1.5)))),
             "WEBSITE": f"https://www.{name.lower().replace(' ', '').replace('&', '')}.com",
         })
 
@@ -399,13 +407,16 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
 
     nyc_records = []
     for i in range(n_nyc):
-        neighborhood = np.random.choice(nyc_neighborhoods)
-        name = f"{np.random.choice(nyc_prefixes)} {neighborhood}"
+        neighborhood = rng.choice(nyc_neighborhoods)
+        name = f"{rng.choice(nyc_prefixes)} {neighborhood}"
 
         # NYC: wider price spread, more budget options
-        price_level = np.random.choice([1, 2, 3, 4], p=[0.15, 0.40, 0.30, 0.15])
-        rating = np.clip(np.random.normal(4.0, 0.5), 2.0, 5.0)
-        total_ratings = int(np.random.lognormal(7.5, 1.3))  # more reviews than Dubai
+        price_level = rng.choice([1, 2, 3, 4], p=[0.15, 0.40, 0.30, 0.15])
+        rating = np.clip(rng.normal(4.0, 0.5), 2.0, 5.0)
+        total_ratings = int(rng.lognormal(7.5, 1.3)) 
+
+        clean_name = name.lower().replace(" ", "").replace("'", "")
+        website = f"https://www.{clean_name}.com" if rng.random() < 0.75 else ""
 
         nyc_records.append({
             "PLACE_ID": f"SYNTH_NYC_{i:04d}",
@@ -415,14 +426,14 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
             "TOTAL_RATINGS": total_ratings,
             "PRICE_LEVEL": price_level,
             "ADDRESS": f"{neighborhood}, New York, NY, USA",
-            "LAT": NYC_LAT + np.random.uniform(-0.06, 0.06),
-            "LNG": NYC_LNG + np.random.uniform(-0.06, 0.06),
+            "LAT": NYC_LAT + rng.uniform(-0.06, 0.06),
+            "LNG": NYC_LNG + rng.uniform(-0.06, 0.06),
             "BUSINESS_STATUS": "OPERATIONAL",
             "TYPES": "lodging, point_of_interest, establishment",
             "NEIGHBORHOOD": neighborhood,
-            "NUM_PHOTOS": np.random.randint(2, 25),
-            "NUM_REVIEWS_FETCHED": min(5, max(0, int(np.random.normal(4, 1)))),
-            "WEBSITE": "",
+            "NUM_PHOTOS": rng.randint(2, 25),
+            "NUM_REVIEWS_FETCHED": min(5, max(0, int(rng.normal(4, 1)))),
+            "WEBSITE": website,
         })
 
     # ── Combine ──
@@ -458,16 +469,21 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
 
     def _gen_reviews(market, n):
         pool = dubai_sentiments if market == "Dubai" else nyc_sentiments
-        reviews = [np.random.choice(pool) for _ in range(n)]
+        reviews = [rng.choice(pool) for _ in range(n)]
         return " ||| ".join(reviews)
 
     combined["REVIEW_TEXTS"] = combined.apply(
         lambda r: _gen_reviews(r["MARKET"], r["NUM_REVIEWS_FETCHED"]), axis=1
     )
-    combined["AVG_REVIEW_RATING"] = combined.apply(
-        lambda r: round(np.clip(r["RATING"] + np.random.uniform(-0.3, 0.3), 1, 5), 2)
-        if r["NUM_REVIEWS_FETCHED"] > 0 else None, axis=1
-    )
+
+    avg_ratings = []
+    for _, row in combined.iterrows():
+        if row["NUM_REVIEWS_FETCHED"] > 0:
+            val = round(np.clip(row["RATING"] + rng.uniform(-0.3, 0.3), 1, 5), 2)
+        else:
+            val = None
+        avg_ratings.append(val)
+    combined["AVG_REVIEW_RATING"] = avg_ratings
 
     print(f"Generated synthetic hotel data: {len(combined)} hotels "
           f"({n_dubai} Dubai + {n_nyc} NYC)")

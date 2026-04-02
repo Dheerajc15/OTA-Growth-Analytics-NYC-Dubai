@@ -59,19 +59,22 @@ def prepare_funnel_data(df: pd.DataFrame) -> pd.DataFrame:
         return "Low"
 
     df["RATING_TIER"] = df["RATING"].apply(_rating_tier)
+    df["VISIBILITY_SCORE"] = 0.0
 
-    # ── Visibility Score (higher = more prominent in search) ──
-    # Normalized 0–100: weighted combo of review count, rating, photos
-    max_ratings = df["TOTAL_RATINGS"].quantile(0.99) or 1
-    max_photos = df["NUM_PHOTOS"].max() or 1
+    for market in df["MARKET"].unique():
+        mask = df["MARKET"] == market
+        mdf = df.loc[mask]
 
-    df["VISIBILITY_SCORE"] = (
-        0.50 * (df["TOTAL_RATINGS"] / max_ratings).clip(0, 1) +
-        0.35 * (df["RATING"].fillna(0) / 5.0) +
-        0.15 * (df["NUM_PHOTOS"] / max_photos).clip(0, 1)
-    ) * 100
+        max_ratings = mdf["TOTAL_RATINGS"].quantile(0.99) or 1
+        max_photos = mdf["NUM_PHOTOS"].max() or 1
 
-    df["VISIBILITY_SCORE"] = df["VISIBILITY_SCORE"].round(1)
+        score = (
+            0.50 * (mdf["TOTAL_RATINGS"] / max_ratings).clip(0, 1) +
+            0.35 * (mdf["RATING"].fillna(0) / 5.0) +
+            0.15 * (mdf["NUM_PHOTOS"] / max_photos).clip(0, 1)
+        ) * 100
+
+        df.loc[mask, "VISIBILITY_SCORE"] = score.round(1)
 
     # ── Bookability Proxy ──
     # A hotel is "bookable" if it's operational, rated, and has some reviews
@@ -157,10 +160,6 @@ def simulate_booking_funnel(
       3. COMPARE  — looks at details, compares 2-3 options (driven by rating)
       4. INTENT   — adds to cart / selects dates (driven by price + rating combo)
       5. BOOK     — completes booking (driven by reviews + trust signals)
-
-    Drop-off rates differ by market:
-      - Dubai: higher drop at COMPARE stage (sticker shock, unfamiliarity)
-      - NYC: higher drop at VIEW stage (too many options = choice paralysis)
     """
     np.random.seed(seed)
     mdf = df[df["MARKET"] == market].copy()
@@ -192,17 +191,31 @@ def simulate_booking_funnel(
     mdf["P_COMPARE"] = np.clip(
         rates["view_to_compare"] * (mdf["RATING"].fillna(3.0) / 4.0), 0.05, 0.95
     )
+
+    market_median_price = mdf["PRICE_LEVEL"].median()
+    if pd.isna(market_median_price):
+        market_median_price = 2.0  
     mdf["P_INTENT"] = np.clip(
-        rates["compare_to_intent"] * (1 - mdf["PRICE_LEVEL"].fillna(2) / 6), 0.05, 0.90
+        rates["compare_to_intent"] * (1 - mdf["PRICE_LEVEL"].fillna(market_median_price) / 6),
+        0.05, 0.90
     )
+
     mdf["P_BOOK"] = np.clip(
         rates["intent_to_book"] * (mdf["TOTAL_RATINGS"].clip(0, 5000) / 3000), 0.05, 0.90
     )
 
-    # Simulate travelers passing through each stage
-    n_visitors = 10000  # hypothetical search volume per month
-    mdf["STAGE_1_SEARCH"] = n_visitors
-    mdf["STAGE_2_VIEW"] = (n_visitors * mdf["P_VIEW"]).astype(int)
+    total_visitors = 10000 
+    visibility_share = mdf["VISIBILITY_SCORE"] / mdf["VISIBILITY_SCORE"].sum()
+    mdf["STAGE_1_SEARCH"] = (total_visitors * visibility_share).round().astype(int)
+
+    mdf["STAGE_1_SEARCH"] = mdf["STAGE_1_SEARCH"].clip(lower=1)
+    # Redistribute any rounding surplus/deficit to the top hotel
+    diff = total_visitors - mdf["STAGE_1_SEARCH"].sum()
+    if diff != 0:
+        top_idx = mdf["VISIBILITY_SCORE"].idxmax()
+        mdf.loc[top_idx, "STAGE_1_SEARCH"] += diff
+
+    mdf["STAGE_2_VIEW"] = (mdf["STAGE_1_SEARCH"] * mdf["P_VIEW"]).astype(int)
     mdf["STAGE_3_COMPARE"] = (mdf["STAGE_2_VIEW"] * mdf["P_COMPARE"]).astype(int)
     mdf["STAGE_4_INTENT"] = (mdf["STAGE_3_COMPARE"] * mdf["P_INTENT"]).astype(int)
     mdf["STAGE_5_BOOK"] = (mdf["STAGE_4_INTENT"] * mdf["P_BOOK"]).astype(int)
@@ -253,7 +266,8 @@ def diagnose_dropoff(
     """
     Identify the biggest funnel drop-off differences between markets.
 
-    Returns actionable insights per stage.
+    FIX Bug 8: Added "Similar" diagnosis entries so every stage
+    gets a meaningful insight even when markets are within ±2pp.
     """
     dubai_summary = get_funnel_summary(dubai_funnel, "Dubai")
     nyc_summary = get_funnel_summary(nyc_funnel, "NYC")
@@ -271,22 +285,27 @@ def diagnose_dropoff(
         lambda g: "Dubai" if g > 2 else ("NYC" if g < -2 else "Similar")
     )
 
+    # FIX Bug 8: Include "Similar" diagnoses
     diagnosis_map = {
         "2. View Listing": {
             "Dubai": "Low click-through: unfamiliar brands, fewer recognizable chains",
             "NYC": "Choice paralysis: too many options overwhelm the traveler",
+            "Similar": "Both markets face moderate click-through; personalization could help both",
         },
         "3. Compare": {
             "Dubai": "Sticker shock: Dubai prices 2-3x higher than expected",
             "NYC": "Easy to compare: traveler knows NYC neighborhoods",
+            "Similar": "Comparable drop-off; consider adding side-by-side comparison tools",
         },
         "4. Intent (Select Dates)": {
             "Dubai": "Visa/logistics friction: 'Do I need a visa?', long-haul anxiety",
             "NYC": "Price sensitivity: budget travelers find NYC expensive too",
+            "Similar": "Both markets lose intent-stage travelers; clearer CTAs needed",
         },
         "5. Book": {
             "Dubai": "Trust gap: unfamiliar destination, fewer reviews from US travelers",
             "NYC": "High confidence: familiar city, many friend recommendations",
+            "Similar": "Similar booking friction; loyalty programs could lift both",
         },
     }
 
@@ -329,34 +348,40 @@ def analyze_price_distribution(df: pd.DataFrame) -> pd.DataFrame:
 # RATING-REVIEW GAP ANALYSIS
 # ═══════════════════════════════════════════════════════════════
 
-def analyze_rating_review_gap(df: pd.DataFrame) -> pd.DataFrame:
+def analyze_rating_review_gap(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Find hotels with high ratings but low review counts (trust gap)
     and vice versa (high reviews but mediocre ratings).
 
-    These are key funnel leakage points:
-    - High rating + low reviews = traveler doesn't trust the rating
-    - Low rating + high reviews = well-known but poorly perceived
+    FIX Bug 5: Uses PER-MARKET medians for quadrant splits so each
+    market's trust landscape is evaluated against its own baseline.
     """
     df = df.copy()
+    df["TRUST_QUADRANT"] = "Unknown"
 
-    rating_median = df["RATING"].median()
-    reviews_median = df["TOTAL_RATINGS"].median()
+    for market in df["MARKET"].unique():
+        mask = df["MARKET"] == market
+        mdf = df.loc[mask]
 
-    conditions = [
-        (df["RATING"] >= rating_median) & (df["TOTAL_RATINGS"] >= reviews_median),
-        (df["RATING"] >= rating_median) & (df["TOTAL_RATINGS"] < reviews_median),
-        (df["RATING"] < rating_median) & (df["TOTAL_RATINGS"] >= reviews_median),
-        (df["RATING"] < rating_median) & (df["TOTAL_RATINGS"] < reviews_median),
-    ]
-    labels = [
-        "⭐ Star Performer",      # high rating + many reviews = trust
-        "🔍 Hidden Gem",           # high rating + few reviews = needs marketing
-        "⚠️ Known but Risky",      # low rating + many reviews = red flag
-        "❌ Low Signal",            # low rating + few reviews = avoid
-    ]
+        rating_median = mdf["RATING"].median()
+        reviews_median = mdf["TOTAL_RATINGS"].median()
 
-    df["TRUST_QUADRANT"] = np.select(conditions, labels, default="Unknown")
+        conditions = [
+            (mdf["RATING"] >= rating_median) & (mdf["TOTAL_RATINGS"] >= reviews_median),
+            (mdf["RATING"] >= rating_median) & (mdf["TOTAL_RATINGS"] < reviews_median),
+            (mdf["RATING"] < rating_median) & (mdf["TOTAL_RATINGS"] >= reviews_median),
+            (mdf["RATING"] < rating_median) & (mdf["TOTAL_RATINGS"] < reviews_median),
+        ]
+        labels = [
+            "⭐ Star Performer",      # high rating + many reviews = trust
+            "🔍 Hidden Gem",           # high rating + few reviews = needs marketing
+            "⚠️ Known but Risky",      # low rating + many reviews = red flag
+            "❌ Low Signal",            # low rating + few reviews = avoid
+        ]
+
+        df.loc[mask, "TRUST_QUADRANT"] = np.select(
+            conditions, labels, default="Unknown"
+        )
 
     quadrant_summary = (
         df.groupby(["MARKET", "TRUST_QUADRANT"])
