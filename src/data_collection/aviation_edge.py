@@ -7,9 +7,6 @@ Provides:
   - Flight routes: which airlines fly JFK/EWR → DXB, frequency
   - Flight schedules/timetables: departure times, days of week
   - Airline database: carrier details
-
-API docs: https://aviation-edge.com/developers/
-Free tier: limited requests/month — cache aggressively.
 """
 
 import requests
@@ -137,8 +134,6 @@ def fetch_timetable(
     if not data:
         return pd.DataFrame()
 
-    df = pd.DataFrame(data)
-
     # The timetable response is nested — flatten key fields
     records = []
     for flight in data:
@@ -251,46 +246,77 @@ def generate_synthetic_flight_data(seed: int = 42) -> pd.DataFrame:
       - Emirates: 1 daily EWR→DXB
       - JetBlue codeshare / Delta seasonal
       - No LGA international
+
+    FIX Bug A1: Uses STABLE flight numbers per airline-airport-slot
+    FIX Bug A2: Calculates realistic arrival_scheduled (~14h later)
     """
     np.random.seed(seed)
 
+    # ── FIX A1: Pre-assign stable flight numbers per route-slot ──
     airlines = {
-        "EK": {"name": "Emirates", "airports": {"JFK": 3, "EWR": 1}, "aircraft": ["A380", "B77W"]},
-        "DL": {"name": "Delta Air Lines", "airports": {"JFK": 1}, "aircraft": ["A359"]},
-        "B6": {"name": "JetBlue Airways", "airports": {"JFK": 1}, "aircraft": ["A321"]},
+        "EK": {
+            "name": "Emirates",
+            "airports": {
+                "JFK": [
+                    {"flight_num": "EK204", "dep_time": "02:15", "aircraft": "A380"},
+                    {"flight_num": "EK202", "dep_time": "10:45", "aircraft": "B77W"},
+                    {"flight_num": "EK206", "dep_time": "23:55", "aircraft": "A380"},
+                ],
+                "EWR": [
+                    {"flight_num": "EK222", "dep_time": "22:30", "aircraft": "B77W"},
+                ],
+            },
+        },
+        "DL": {
+            "name": "Delta Air Lines",
+            "airports": {
+                "JFK": [
+                    {"flight_num": "DL420", "dep_time": "14:00", "aircraft": "A359"},
+                ],
+            },
+        },
+        "B6": {
+            "name": "JetBlue Airways",
+            "airports": {
+                "JFK": [
+                    {"flight_num": "B6725", "dep_time": "00:30", "aircraft": "A321"},
+                ],
+            },
+        },
     }
 
-    departure_times = ["00:30", "02:15", "10:45", "14:00", "22:30", "23:55"]
-
     records = []
-    # Generate 90 days of schedules
     dates = pd.date_range("2025-01-01", periods=90, freq="D")
 
     for date in dates:
         for airline_code, info in airlines.items():
-            for airport, daily_flights in info["airports"].items():
-                # Some flights don't operate every day
-                for flight_num in range(daily_flights):
+            for airport, slots in info["airports"].items():
+                for slot in slots:
                     # Seasonal variation: fewer flights in summer
                     if date.month in [6, 7, 8] and np.random.random() < 0.3:
-                        continue  # skip ~30% of summer flights
+                        continue
 
-                    dep_time = np.random.choice(departure_times)
-                    aircraft = np.random.choice(info["aircraft"])
-                    flight_number = f"{airline_code}{np.random.randint(200, 999)}"
+                    dep_time = slot["dep_time"]
+
+                    # FIX A2: Calculate realistic arrival time (~14h flight)
+                    dep_hour, dep_min = map(int, dep_time.split(":"))
+                    arr_hour = (dep_hour + 14) % 24
+                    next_day = (dep_hour + 14) >= 24
+                    arr_date = date + pd.Timedelta(days=1) if next_day else date
+                    arr_time = f"{arr_hour:02d}:{dep_min:02d}"
 
                     records.append({
-                        "flight_iata": flight_number,
+                        "flight_iata": slot["flight_num"],
                         "airline_iata": airline_code,
                         "airline_name": info["name"],
                         "departure_airport": airport,
                         "departure_scheduled": f"{date.strftime('%Y-%m-%d')}T{dep_time}",
                         "departure_terminal": np.random.choice(["1", "4", "7"]),
                         "arrival_airport": "DXB",
-                        "arrival_scheduled": "",  # ~14hr flight
+                        "arrival_scheduled": f"{arr_date.strftime('%Y-%m-%d')}T{arr_time}",
                         "arrival_terminal": np.random.choice(["1", "3"]),
                         "status": "scheduled",
-                        "aircraft_iata": aircraft,
+                        "aircraft_iata": slot["aircraft"],
                         "date": date,
                     })
 
@@ -320,17 +346,16 @@ def generate_synthetic_monthly_capacity(seed: int = 42) -> pd.DataFrame:
 
     records = []
     for date in dates:
-        base_daily_flights = 5  # ~5 daily flights across all airlines
+        base_daily_flights = 5
         factor = seasonal[date.month] * covid_factor.get(date.year, 1.0)
         daily_flights = base_daily_flights * factor * np.random.uniform(0.85, 1.15)
 
-        avg_seats_per_flight = 380  # weighted avg (A380=500, 777=300, A321=200)
+        avg_seats_per_flight = 380
         monthly_days = pd.Period(date, "M").days_in_month
 
         monthly_flights = int(daily_flights * monthly_days)
         monthly_seats = int(daily_flights * avg_seats_per_flight * monthly_days)
 
-        # Estimate passengers using ~82% load factor (industry avg for long-haul)
         load_factor = np.random.uniform(0.75, 0.90)
         monthly_passengers = int(monthly_seats * load_factor)
 
@@ -346,7 +371,8 @@ def generate_synthetic_monthly_capacity(seed: int = 42) -> pd.DataFrame:
         })
 
     df = pd.DataFrame(records)
-    print(f"Generated monthly capacity: {len(df)} months ({dates[0].strftime('%Y-%m')} → {dates[-1].strftime('%Y-%m')})")
+    print(f"Generated monthly capacity: {len(df)} months "
+          f"({dates[0].strftime('%Y-%m')} → {dates[-1].strftime('%Y-%m')})")
     return df
 
 

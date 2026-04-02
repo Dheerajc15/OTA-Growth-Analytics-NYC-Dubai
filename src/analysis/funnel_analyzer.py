@@ -32,6 +32,7 @@ def prepare_funnel_data(df: pd.DataFrame) -> pd.DataFrame:
       - PRICE_TIER: "Budget" / "Mid-Range" / "Upscale" / "Luxury"
       - RATING_TIER: "Low" / "Average" / "Good" / "Excellent"
       - VISIBILITY_SCORE: composite of ratings_count × rating × photos
+        (normalized PER-MARKET to avoid cross-market distortion)
       - IS_BOOKABLE: proxy for whether a traveler would consider booking
     """
     df = df.copy()
@@ -59,6 +60,8 @@ def prepare_funnel_data(df: pd.DataFrame) -> pd.DataFrame:
         return "Low"
 
     df["RATING_TIER"] = df["RATING"].apply(_rating_tier)
+
+    # ── Visibility Score — PER-MARKET normalization ──
     df["VISIBILITY_SCORE"] = 0.0
 
     for market in df["MARKET"].unique():
@@ -77,7 +80,6 @@ def prepare_funnel_data(df: pd.DataFrame) -> pd.DataFrame:
         df.loc[mask, "VISIBILITY_SCORE"] = score.round(1)
 
     # ── Bookability Proxy ──
-    # A hotel is "bookable" if it's operational, rated, and has some reviews
     df["IS_BOOKABLE"] = (
         (df["RATING"].notna()) &
         (df["TOTAL_RATINGS"] >= 10) &
@@ -96,7 +98,6 @@ def prepare_funnel_data(df: pd.DataFrame) -> pd.DataFrame:
 def compare_markets(df: pd.DataFrame) -> pd.DataFrame:
     """
     Side-by-side comparison of Dubai vs NYC hotel markets.
-
     Returns DataFrame with one row per market and key metrics.
     """
     metrics = []
@@ -160,6 +161,9 @@ def simulate_booking_funnel(
       3. COMPARE  — looks at details, compares 2-3 options (driven by rating)
       4. INTENT   — adds to cart / selects dates (driven by price + rating combo)
       5. BOOK     — completes booking (driven by reviews + trust signals)
+
+    Uses MARKET-LEVEL visitor pool (10,000 total distributed by
+    visibility share) and per-market median price for NaN fillna.
     """
     np.random.seed(seed)
     mdf = df[df["MARKET"] == market].copy()
@@ -194,7 +198,7 @@ def simulate_booking_funnel(
 
     market_median_price = mdf["PRICE_LEVEL"].median()
     if pd.isna(market_median_price):
-        market_median_price = 2.0  
+        market_median_price = 2.0
     mdf["P_INTENT"] = np.clip(
         rates["compare_to_intent"] * (1 - mdf["PRICE_LEVEL"].fillna(market_median_price) / 6),
         0.05, 0.90
@@ -204,7 +208,8 @@ def simulate_booking_funnel(
         rates["intent_to_book"] * (mdf["TOTAL_RATINGS"].clip(0, 5000) / 3000), 0.05, 0.90
     )
 
-    total_visitors = 10000 
+    # Market-level visitor pool
+    total_visitors = 10000
     visibility_share = mdf["VISIBILITY_SCORE"] / mdf["VISIBILITY_SCORE"].sum()
     mdf["STAGE_1_SEARCH"] = (total_visitors * visibility_share).round().astype(int)
 
@@ -224,7 +229,9 @@ def simulate_booking_funnel(
 
 
 def get_funnel_summary(funnel_df: pd.DataFrame, market: str) -> pd.DataFrame:
-    """Aggregate funnel stages into a summary table."""
+    """
+    Aggregate funnel stages into a summary table.
+    """
     stages = [
         ("1. Search", "STAGE_1_SEARCH"),
         ("2. View Listing", "STAGE_2_VIEW"),
@@ -233,19 +240,26 @@ def get_funnel_summary(funnel_df: pd.DataFrame, market: str) -> pd.DataFrame:
         ("5. Book", "STAGE_5_BOOK"),
     ]
 
+    stage_1_total = funnel_df["STAGE_1_SEARCH"].sum()
     rows = []
     prev = None
     for label, col in stages:
         total = funnel_df[col].sum()
-        drop = (prev - total) if prev else 0
-        drop_pct = (drop / prev * 100) if prev else 0
-        conversion = (total / funnel_df["STAGE_1_SEARCH"].sum() * 100)
+        conversion = (total / stage_1_total * 100) if stage_1_total > 0 else 0
+
+        if prev is not None:
+            # Normal stage: compute drop-off from previous stage
+            drop = prev - total
+            drop_pct = round((drop / prev * 100) if prev > 0 else 0, 1)
+        else:
+            drop = np.nan
+            drop_pct = np.nan
 
         rows.append({
             "STAGE": label,
             "VISITORS": total,
             "DROP_OFF": drop,
-            "DROP_OFF_PCT": round(drop_pct, 1),
+            "DROP_OFF_PCT": drop_pct,
             "OVERALL_CONVERSION_PCT": round(conversion, 2),
         })
         prev = total
@@ -266,8 +280,8 @@ def diagnose_dropoff(
     """
     Identify the biggest funnel drop-off differences between markets.
 
-    FIX Bug 8: Added "Similar" diagnosis entries so every stage
-    gets a meaningful insight even when markets are within ±2pp.
+    Returns actionable insights per stage.
+
     """
     dubai_summary = get_funnel_summary(dubai_funnel, "Dubai")
     nyc_summary = get_funnel_summary(nyc_funnel, "NYC")
@@ -281,31 +295,48 @@ def diagnose_dropoff(
     ).round(1)
 
     # Positive = Dubai drops more; Negative = NYC drops more
-    merged["WORSE_MARKET"] = merged["DROPOFF_GAP"].apply(
-        lambda g: "Dubai" if g > 2 else ("NYC" if g < -2 else "Similar")
-    )
+    # Handle NaN (stage 1) gracefully
+    def _classify_gap(g):
+        if pd.isna(g):
+            return "—"
+        if g > 2:
+            return "Dubai"
+        if g < -2:
+            return "NYC"
+        return "Similar"
 
-    # FIX Bug 8: Include "Similar" diagnoses
+    merged["WORSE_MARKET"] = merged["DROPOFF_GAP"].apply(_classify_gap)
+
     diagnosis_map = {
+        "1. Search": {
+            "Dubai": "—",
+            "NYC": "—",
+            "Similar": "—",
+            "—": "—",
+        },
         "2. View Listing": {
             "Dubai": "Low click-through: unfamiliar brands, fewer recognizable chains",
             "NYC": "Choice paralysis: too many options overwhelm the traveler",
             "Similar": "Both markets face moderate click-through; personalization could help both",
+            "—": "—",
         },
         "3. Compare": {
             "Dubai": "Sticker shock: Dubai prices 2-3x higher than expected",
             "NYC": "Easy to compare: traveler knows NYC neighborhoods",
             "Similar": "Comparable drop-off; consider adding side-by-side comparison tools",
+            "—": "—",
         },
         "4. Intent (Select Dates)": {
             "Dubai": "Visa/logistics friction: 'Do I need a visa?', long-haul anxiety",
             "NYC": "Price sensitivity: budget travelers find NYC expensive too",
             "Similar": "Both markets lose intent-stage travelers; clearer CTAs needed",
+            "—": "—",
         },
         "5. Book": {
             "Dubai": "Trust gap: unfamiliar destination, fewer reviews from US travelers",
             "NYC": "High confidence: familiar city, many friend recommendations",
             "Similar": "Similar booking friction; loyalty programs could lift both",
+            "—": "—",
         },
     }
 
@@ -353,8 +384,8 @@ def analyze_rating_review_gap(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     Find hotels with high ratings but low review counts (trust gap)
     and vice versa (high reviews but mediocre ratings).
 
-    FIX Bug 5: Uses PER-MARKET medians for quadrant splits so each
-    market's trust landscape is evaluated against its own baseline.
+    Uses PER-MARKET medians for quadrant splits so each market's
+    trust landscape is evaluated against its own baseline.
     """
     df = df.copy()
     df["TRUST_QUADRANT"] = "Unknown"

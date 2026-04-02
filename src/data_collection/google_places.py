@@ -7,9 +7,6 @@ Fetches hotel/accommodation data for Dubai and NYC:
   - Text Search: find hotels by query ("luxury hotels Dubai")
   - Place Details: ratings, reviews, price_level, photos, opening_hours
   - Nearby Search: hotels within radius of coordinates
-
-API Reference: https://developers.google.com/maps/documentation/places/web-service
-Free tier: $200/month credit ≈ 10,000 detail requests
 """
 
 import requests
@@ -38,7 +35,7 @@ except ImportError:
 
 # ═══════════════════════════════════════════════════════════════
 # LOW-LEVEL API CALLS
-# ════════════════════════════════════════════════════��══════════
+# ═══════════════════════════════════════════════════════════════
 
 def _check_api_key() -> bool:
     """Verify the Google Cloud API key is set."""
@@ -102,12 +99,10 @@ def text_search(
         all_results.extend(results)
         print(f"    Page {page}: +{len(results)} places (total: {len(all_results)})")
 
-        # Check for next page
         next_token = data.get("next_page_token")
         if not next_token or len(all_results) >= max_results:
             break
 
-        # Google requires ~2s delay before next_page_token is valid
         time.sleep(2.5)
         params = {"pagetoken": next_token, "key": GOOGLE_CLOUD_API_KEY}
         page += 1
@@ -118,10 +113,6 @@ def text_search(
 def get_place_details(place_id: str) -> Optional[dict]:
     """
     Fetch detailed info for a single place (reviews, price_level, etc.)
-
-    Fields requested: name, rating, user_ratings_total, price_level,
-    formatted_address, geometry, types, reviews, website, url, photos,
-    business_status, opening_hours
     """
     if not _check_api_key():
         return None
@@ -161,33 +152,13 @@ def fetch_hotels_for_market(
 ) -> pd.DataFrame:
     """
     Fetch hotel data for an entire market (Dubai or NYC).
-
-    Pipeline:
-      1. Text Search for each query → get place_ids
-      2. Deduplicate by place_id
-      3. (Optional) Fetch Place Details for each unique hotel
-      4. Return structured DataFrame
-
-    Parameters
-    ----------
-    queries : list of search queries
-    market_name : "Dubai" or "NYC" — added as MARKET column
-    location : "lat,lng" to bias results
-    fetch_details : whether to call Place Details API (costs more quota)
-    max_per_query : max results per text search query
-    detail_delay : seconds between detail calls (rate limiting)
-
-    Returns
-    -------
-    pd.DataFrame with hotel-level data
     """
     print(f"\n{'='*60}")
     print(f"  Fetching {market_name} Hotels")
     print(f"  Queries: {len(queries)} | Details: {fetch_details}")
     print(f"{'='*60}")
 
-    # Step 1: Text Search across all queries
-    all_places = {}  # place_id → place dict (dedup)
+    all_places = {}
 
     for i, query in enumerate(queries):
         print(f"\n[{i+1}/{len(queries)}] '{query}'")
@@ -205,7 +176,6 @@ def fetch_hotels_for_market(
     if not all_places:
         return pd.DataFrame()
 
-    # Step 2: Parse text search results into records
     records = []
     for pid, place in all_places.items():
         geo = place.get("geometry", {}).get("location", {})
@@ -224,7 +194,6 @@ def fetch_hotels_for_market(
         }
         records.append(record)
 
-    # Step 3: Optionally fetch detailed info (reviews, website, etc.)
     if fetch_details and _check_api_key():
         print(f"\n📋 Fetching details for {len(records)} hotels...")
         for i, record in enumerate(records):
@@ -235,7 +204,6 @@ def fetch_hotels_for_market(
                 record["PHONE"] = details.get("formatted_phone_number", "")
                 record["NUM_PHOTOS"] = len(details.get("photos", []))
 
-                # Extract reviews
                 reviews = details.get("reviews", [])
                 record["NUM_REVIEWS_FETCHED"] = len(reviews)
                 if reviews:
@@ -248,7 +216,6 @@ def fetch_hotels_for_market(
                     record["AVG_REVIEW_RATING"] = None
                     record["REVIEW_TEXTS"] = ""
 
-                # Opening hours
                 oh = details.get("opening_hours", {})
                 record["OPEN_NOW"] = oh.get("open_now")
 
@@ -332,10 +299,6 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
     - Dubai: higher prices, fewer listings, luxury-skewed, higher avg ratings
     - NYC: lower prices, massive listing density, wider spread, more reviews
 
-    FIXES:
-    - Bug 1: BUSINESS_STATUS uses proper 2-value choice
-    - Bug 2: AVG_REVIEW_RATING uses explicit conditional (no lambda ambiguity)
-    - Bug 3: NYC hotels now have realistic website URLs
     """
     rng = np.random.RandomState(seed)
 
@@ -359,13 +322,10 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
         neighborhood = rng.choice(dubai_neighborhoods)
         name = f"{rng.choice(dubai_prefixes)} {neighborhood}"
 
-        # Dubai is luxury-skewed: price_level 3-4 dominant
         price_level = rng.choice([1, 2, 3, 4], p=[0.05, 0.20, 0.40, 0.35])
-        # Ratings: higher than NYC avg (luxury = better service)
         rating = np.clip(rng.normal(4.3, 0.4), 2.5, 5.0)
-        total_ratings = int(rng.lognormal(7.0, 1.2))  # fewer reviews than NYC
+        total_ratings = int(rng.lognormal(7.0, 1.2))
 
-        # FIX Bug 1: Clean 2-value choice for BUSINESS_STATUS
         business_status = rng.choice(
             ["OPERATIONAL", "CLOSED_TEMPORARILY"],
             p=[0.98, 0.02],
@@ -410,11 +370,9 @@ def generate_synthetic_hotels(seed: int = 42) -> pd.DataFrame:
         neighborhood = rng.choice(nyc_neighborhoods)
         name = f"{rng.choice(nyc_prefixes)} {neighborhood}"
 
-        # NYC: wider price spread, more budget options
         price_level = rng.choice([1, 2, 3, 4], p=[0.15, 0.40, 0.30, 0.15])
         rating = np.clip(rng.normal(4.0, 0.5), 2.0, 5.0)
-        total_ratings = int(rng.lognormal(7.5, 1.3)) 
-
+        total_ratings = int(rng.lognormal(7.5, 1.3))
         clean_name = name.lower().replace(" ", "").replace("'", "")
         website = f"https://www.{clean_name}.com" if rng.random() < 0.75 else ""
 
