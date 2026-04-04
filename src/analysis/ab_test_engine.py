@@ -40,152 +40,18 @@ except ImportError:
     AB_TEST_SAMPLE_SIZE = 10000
     AB_TEST_SEED = 42
 
-
-# ═══════════════════════════════════════════════════════════════
-# SYNTHETIC DATA GENERATION
-# ═══════════════════════════════════════════════════════════════
-
-def generate_ab_test_data(
-    n: int = None,
-    seed: int = None,
-    control_cvr: float = 0.032,
-    treatment_lift: float = 0.35,
-    bundle_discount: float = 0.12,
-) -> pd.DataFrame:
-    """
-    Generate realistic A/B test data for bundle vs hotel-only pricing.
-
-    Parameters
-    ----------
-    n : total sample size (split 50/50). Defaults to AB_TEST_SAMPLE_SIZE.
-    seed : random seed. Defaults to AB_TEST_SEED.
-    control_cvr : baseline conversion rate for hotel-only (3.2% is OTA industry avg).
-    treatment_lift : relative lift in conversion from bundling (35% → ~4.3% CVR).
-    bundle_discount : discount applied to bundle price (12%).
-
-    Returns
-    -------
-    DataFrame with one row per visitor impression.
-    """
-    n = n or AB_TEST_SAMPLE_SIZE
-    seed = seed or AB_TEST_SEED
-    rng = np.random.RandomState(seed)
-
-    n_control = n // 2
-    n_treatment = n - n_control
-    treatment_cvr = control_cvr * (1 + treatment_lift)
-
-    # ── Assign fare classes with realistic distribution ──
-    fare_class_probs = {"economy": 0.70, "business": 0.25, "first": 0.05}
-    fare_classes = rng.choice(
-        list(fare_class_probs.keys()),
-        size=n,
-        p=list(fare_class_probs.values()),
+def load_ab_test_data() -> pd.DataFrame:
+    """Load A/B test data from seeds (replaces generate_ab_test_data)."""
+    from config.settings import SEEDS_DIR
+    path = SEEDS_DIR / "ab_test.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    csv_path = SEEDS_DIR / "ab_test.csv"
+    if csv_path.exists():
+        return pd.read_csv(csv_path)
+    raise FileNotFoundError(
+        f"No A/B test seed data found. Run: python scripts/generate_seeds.py"
     )
-
-    # ── Generate base hotel prices per fare class ──
-    hotel_prices = np.zeros(n)
-    for fc, params in FARE_RANGES.items():
-        mask = fare_classes == fc
-        count = mask.sum()
-        if count > 0:
-            prices = rng.normal(params["mean"], params["std"], size=count)
-            prices = np.clip(prices, params["min"], params["max"])
-            hotel_prices[mask] = prices
-
-    # ── Traveler segments ──
-    traveler_types = rng.choice(
-        ["leisure", "business", "transit"],
-        size=n,
-        p=[0.55, 0.35, 0.10],
-    )
-
-    # ── Device types ──
-    devices = rng.choice(
-        ["mobile", "desktop", "tablet"],
-        size=n,
-        p=[0.55, 0.35, 0.10],
-    )
-
-    # ── Booking lead time (days before travel) ──
-    lead_times = rng.exponential(scale=25, size=n).astype(int)
-    lead_times = np.clip(lead_times, 1, 180)
-
-    # ── Day of week (0=Mon, 6=Sun) ──
-    day_of_week = rng.choice(7, size=n, p=[0.13, 0.15, 0.14, 0.14, 0.16, 0.15, 0.13])
-
-    # ── Build group assignments ──
-    groups = np.array(["control"] * n_control + ["treatment"] * n_treatment)
-
-    # ── Compute bundle prices (treatment gets discount) ──
-    bundle_prices = hotel_prices.copy()
-    treatment_mask = groups == "treatment"
-    bundle_prices[treatment_mask] *= (1 - bundle_discount)
-
-    # ── Simulate conversions with segment-level modulation ──
-    base_cvr = np.where(groups == "control", control_cvr, treatment_cvr)
-
-    # Fare class effect: business travelers convert higher
-    fare_multiplier = np.where(
-        fare_classes == "business", 1.25,
-        np.where(fare_classes == "first", 0.80, 1.0)
-    )
-
-    # Device effect: desktop converts better than mobile
-    device_multiplier = np.where(
-        devices == "desktop", 1.15,
-        np.where(devices == "mobile", 0.90, 1.0)
-    )
-
-    # Lead time effect: 7-30 day lead converts best
-    lead_multiplier = np.where(
-        (lead_times >= 7) & (lead_times <= 30), 1.10,
-        np.where(lead_times > 60, 0.85, 1.0)
-    )
-
-    # Bundle discount has EXTRA lift for price-sensitive (economy) travelers
-    bundle_sensitivity = np.where(
-        (groups == "treatment") & (fare_classes == "economy"), 1.15,
-        np.where(
-            (groups == "treatment") & (fare_classes == "first"), 0.95,
-            1.0
-        )
-    )
-
-    effective_cvr = np.clip(
-        base_cvr * fare_multiplier * device_multiplier * lead_multiplier * bundle_sensitivity,
-        0.005, 0.20,
-    )
-
-    converted = rng.binomial(1, effective_cvr)
-
-    # ── Revenue (only for converted visitors) ──
-    display_price = np.where(groups == "treatment", bundle_prices, hotel_prices)
-    revenue = np.where(converted == 1, display_price, 0.0)
-
-    # ── Assemble DataFrame ──
-    df = pd.DataFrame({
-        "VISITOR_ID": [f"V{i:06d}" for i in range(n)],
-        "GROUP": groups,
-        "FARE_CLASS": fare_classes,
-        "TRAVELER_TYPE": traveler_types,
-        "DEVICE": devices,
-        "LEAD_TIME_DAYS": lead_times,
-        "DAY_OF_WEEK": day_of_week,
-        "HOTEL_PRICE": hotel_prices.round(2),
-        "DISPLAY_PRICE": display_price.round(2),
-        "BUNDLE_DISCOUNT_PCT": np.where(groups == "treatment", bundle_discount * 100, 0),
-        "CONVERTED": converted,
-        "REVENUE": revenue.round(2),
-    })
-
-    print(f"Generated A/B test data: {len(df):,} visitors")
-    print(f"  Control: {n_control:,} | Treatment: {n_treatment:,}")
-    print(f"  Control CVR: {df[df['GROUP']=='control']['CONVERTED'].mean():.3%}")
-    print(f"  Treatment CVR: {df[df['GROUP']=='treatment']['CONVERTED'].mean():.3%}")
-
-    return df
-
 
 # ═══════════════════════════════════════════════════════════════
 # PRE-TEST VALIDATION (SRM CHECK)
