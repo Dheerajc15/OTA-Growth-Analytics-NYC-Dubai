@@ -23,9 +23,18 @@ load_dotenv()
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_RAW = ROOT_DIR / "data" / "raw"
 DATA_PROCESSED = ROOT_DIR / "data" / "processed"
+DATA_SEEDS = ROOT_DIR / "data" / "seeds"
 OUTPUTS = ROOT_DIR / "outputs"
 FIGURES_DIR = OUTPUTS / "figures"
 REPORTS_DIR = OUTPUTS / "reports"
+
+# ═══════════════════════════════════════════════════════════════
+# DATA MODE
+# ═══════════════════════════════════════════════════════════════
+# True  = load from data/seeds/ (deterministic fixtures, no API needed)
+# False = load from data/raw/   (real API pulls)
+USE_SYNTHETIC = os.getenv("OTA_USE_SYNTHETIC", "true").lower() in ("true", "1", "yes")
+SEEDS_DIR = ROOT_DIR / "data" / "seeds"
 
 # ═══════════════════════════════════════════════════════════════
 # API KEYS
@@ -35,6 +44,11 @@ GOOGLE_CLOUD_API_KEY = os.getenv("GOOGLE_CLOUD_API_KEY")
 
 # Aviation Edge — flight route data
 AVIATION_EDGE_API_KEY = os.getenv("AVIATION_EDGE_API_KEY")
+
+# ═══════════════════════════════════════════════════════════════
+# DATA MODE — synthetic vs live
+# ═══════════════════════════════════════════════════════════════
+USE_SYNTHETIC = os.getenv("USE_SYNTHETIC", "true").lower() == "true"
 
 # ═══════════════════════════════════════════════════════════════
 # ROUTE CONSTANTS
@@ -107,11 +121,11 @@ AVIATION_EDGE_BASE_URL = "https://aviation-edge.com/v2/public"
 
 # Endpoints we'll use
 AVIATION_EDGE_ENDPOINTS = {
-    "routes": "/routes",           # airline routes for JFK/EWR → DXB
-    "flights": "/flights",         # live/historical flight data
-    "timetable": "/timetable",     # flight schedules
-    "airlines": "/airlineDatabase", # airline details
-    "airports": "/airportDatabase", # airport details
+    "routes": "/routes",
+    "flights": "/flights",
+    "timetable": "/timetable",
+    "airlines": "/airlineDatabase",
+    "airports": "/airportDatabase",
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -143,29 +157,5 @@ FARE_RANGES = {
 AB_TEST_SAMPLE_SIZE = 10000
 AB_TEST_SEED = 42
 
-# ════════════════════════════════════════════��══════════════════
-# TRAVELER ARCHETYPES (M04)
-# ═══════════════════════════════════════════════════════════════
-TRAVELER_ARCHETYPES = {
-    "business":  {"stay_range": (2, 5),  "fare_class": "business"},
-    "leisure":   {"stay_range": (5, 14), "fare_class": "economy"},
-    "transit":   {"stay_range": (1, 2),  "fare_class": "economy"},
-}
-
-# ═══════════════════════════════════════════════════════════════
-# VISA POLICY TIMELINE — UAE for US passport holders (M06)
-# ═══════════════════════════════════════════════════════════════
-VISA_POLICY_EVENTS = [
-    {"date": "2014-01-01", "event": "Visa-on-arrival for US citizens (30-day free)",
-     "friction_score": 2, "direction": "reduced"},
-    {"date": "2017-06-01", "event": "6-month multiple entry visa option",
-     "friction_score": 1, "direction": "reduced"},
-    {"date": "2020-03-15", "event": "COVID-19 travel ban",
-     "friction_score": 10, "direction": "increased"},
-    {"date": "2020-07-07", "event": "UAE reopened with PCR test requirement",
-     "friction_score": 7, "direction": "reduced"},
-    {"date": "2022-02-26", "event": "All COVID entry requirements removed",
-     "friction_score": 1, "direction": "reduced"},
-    {"date": "2023-01-01", "event": "UAE visa-free expanded, streamlined e-gate",
-     "friction_score": 1, "direction": "reduced"},
-]
+# ════════════════════════════════════════════════════════════════
+#

@@ -206,9 +206,13 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Data files (too large for Git — download fresh per README)
+# Data files — DVC-tracked (too large for Git)
 data/raw/
 data/processed/
+
+# DVC outputs that shouldn't be in git
+/data/seeds/*.parquet
+/data/seeds/*.csv
 
 # Output artifacts
 outputs/figures/
@@ -217,5 +221,7 @@ outputs/reports/
 # Keep directory structure via .gitkeep
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/seeds/.gitkeep
 !outputs/figures/.gitkeep
 !outputs/reports/.gitkeep
+

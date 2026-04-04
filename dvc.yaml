@@ -1,0 +1,33 @@
+stages:
+  generate-seeds:
+    cmd: python scripts/generate_seeds.py --format parquet
+    deps:
+      - scripts/generate_seeds.py
+      - config/settings.py
+    outs:
+      - data/seeds/google_trends.parquet
+      - data/seeds/aviation_flights.parquet
+      - data/seeds/aviation_capacity.parquet
+      - data/seeds/hotels.parquet
+      - data/seeds/youtube.parquet
+      - data/seeds/ab_test.parquet
+
+  preprocess:
+    cmd: python scripts/preprocess_all.py --source seeds
+    deps:
+      - scripts/preprocess_all.py
+      - data/seeds/google_trends.parquet
+      - data/seeds/aviation_capacity.parquet
+      - data/seeds/hotels.parquet
+      - data/seeds/youtube.parquet
+      - src/preprocessing/trends.py
+      - src/preprocessing/aviation.py
+      - src/preprocessing/hotels.py
+      - src/preprocessing/youtube.py
+      - src/preprocessing/travelers.py
+    outs:
+      - data/processed/trends_monthly.parquet
+      - data/processed/forecast_ready.parquet
+      - data/processed/hotels_prepared.parquet
+      - data/processed/youtube_prepared.parquet
+      - data/processed/traveler_profiles.parquet

@@ -1,0 +1,8 @@
+# DVC ignore file
+.git
+.gitignore
+__pycache__
+*.pyc
+.ipynb_checkpoints
+outputs/
+notebooks/
