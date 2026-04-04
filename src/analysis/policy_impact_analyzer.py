@@ -104,7 +104,8 @@ def pre_post_impact(
 
     pre_mean = pre[metric_col].mean()
     post_mean = post[metric_col].mean()
-    pct_change = ((post_mean - pre_mean) / pre_mean * 100) if pre_mean and not np.isnan(pre_mean) else np.nan
+    # FIX: use `pre_mean != 0` instead of truthy check (0.0 is a valid mean)
+    pct_change = ((post_mean - pre_mean) / pre_mean * 100) if (pre_mean != 0 and not np.isnan(pre_mean)) else np.nan
 
     return {
         "event_date": d0.date().isoformat(),
@@ -186,7 +187,8 @@ def friction_demand_correlation(
         return {"pearson": np.nan, "spearman": np.nan, "n": len(valid)}
 
     pearson = valid[friction_col].corr(valid[demand_col])
-    spearman = valid[friction_col].corr(valid[demand_col], method="spearman")
+    # FIX: Series.corr() does not support method= kwarg; use DataFrame.corr()
+    spearman = valid[[friction_col, demand_col]].corr(method="spearman").iloc[0, 1]
     return {
         "pearson": round(pearson, 4),
         "spearman": round(spearman, 4),
@@ -230,7 +232,7 @@ def regime_summary_stats(
 
 def classify_shock_severity(pct_change: float) -> str:
     """Classify demand change into severity bucket."""
-    if pct_change is None or np.isnan(pct_change):
+    if pct_change is None or not isinstance(pct_change, (int, float)) or np.isnan(pct_change):
         return "unknown"
     if pct_change <= -50:
         return "catastrophic"
