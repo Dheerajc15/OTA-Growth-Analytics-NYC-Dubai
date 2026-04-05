@@ -1,8 +1,6 @@
 """
-Google Trends Data Collector (Data Source #3)
+Google Trends Data Collector 
 ==============================================
-Used in: M01 (Demand Forecasting), M06 (Visa & Friction Analysis)
-
 Tracks search interest for NYC -> Dubai travel keywords from New York State.
 No API key required — pytrends scrapes Google Trends directly.
 
@@ -100,9 +98,7 @@ def detect_search_spikes(
     threshold_std: float = 1.5,
     rolling_window: int = 12,
 ) -> pd.DataFrame:
-    """
-    Find weeks where search interest spikes above rolling_mean + threshold x rolling_std.
-    """
+    """Find weeks where search interest spikes above rolling_mean + threshold x rolling_std."""
     if keyword not in df.columns:
         raise ValueError(f"'{keyword}' not in columns: {list(df.columns)}")
 
@@ -192,4 +188,4 @@ if __name__ == "__main__":
             peaks = s[s["IS_PEAK"]]["MONTH_NAME"].tolist()
             print(f"  '{kw}' peaks: {', '.join(peaks)}")
     else:
-        print("No data retrieved. Set up pytrends or use: python scripts/generate_seeds.py")
+        print("No data retrieved. Run: python scripts/generate_seeds.py")

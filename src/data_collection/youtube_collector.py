@@ -1,13 +1,10 @@
 """
-YouTube Data API v3 Collector (Data Source #5)
+YouTube Data API v3 Collector 
 ================================================
-Used in: M05 (Sentiment & Marketing Attribution)
-
-Fetches YouTube video metadata for NYC→Dubai travel content:
+Fetches YouTube video metadata for NYC->Dubai travel content:
   - Search by queries ("NYC to Dubai travel vlog", etc.)
   - Video statistics: views, likes, comments
   - Channel metadata
-  - Synthetic fallback when API key unavailable
 """
 
 import os
@@ -22,7 +19,7 @@ os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 4))
 try:
     from config.settings import (
         GOOGLE_CLOUD_API_KEY, YOUTUBE_SEARCH_QUERIES,
-        YOUTUBE_MAX_RESULTS_PER_QUERY, DATA_RAW, AB_TEST_SEED,
+        YOUTUBE_MAX_RESULTS_PER_QUERY, DATA_RAW,
     )
 except ImportError:
     GOOGLE_CLOUD_API_KEY = None
@@ -36,9 +33,7 @@ except ImportError:
     ]
     YOUTUBE_MAX_RESULTS_PER_QUERY = 50
     DATA_RAW = Path("data/raw")
-    AB_TEST_SEED = 42
 
-# Try to import google-api-python-client
 try:
     from googleapiclient.discovery import build as yt_build
     HAS_YT_CLIENT = True
@@ -53,11 +48,10 @@ except ImportError:
 def _get_youtube_service():
     """Build authenticated YouTube API service."""
     if not GOOGLE_CLOUD_API_KEY:
-        print("⚠️ GOOGLE_CLOUD_API_KEY not set — cannot use YouTube API")
+        print("GOOGLE_CLOUD_API_KEY not set — cannot use YouTube API")
         return None
     if not HAS_YT_CLIENT:
-        print("⚠️ google-api-python-client not installed")
-        print("   pip install google-api-python-client")
+        print("google-api-python-client not installed")
         return None
     return yt_build("youtube", "v3", developerKey=GOOGLE_CLOUD_API_KEY)
 
@@ -68,18 +62,7 @@ def search_youtube_videos(
     order: str = "relevance",
     published_after: Optional[str] = None,
 ) -> list[dict]:
-    """
-    Search YouTube for videos matching a query.
-
-    Parameters
-    ----------
-    query : search terms
-    max_results : up to 50 per API call
-    order : "relevance", "date", "viewCount", "rating"
-    published_after : ISO 8601 date (e.g. "2020-01-01T00:00:00Z")
-
-    Returns list of video metadata dicts.
-    """
+    """Search YouTube for videos matching a query."""
     youtube = _get_youtube_service()
     if not youtube:
         return []
@@ -118,16 +101,12 @@ def search_youtube_videos(
 
 
 def get_video_statistics(video_ids: list[str]) -> dict:
-    """
-    Fetch view/like/comment counts for a batch of video IDs.
-    API allows up to 50 IDs per request.
-    """
+    """Fetch view/like/comment counts for a batch of video IDs."""
     youtube = _get_youtube_service()
     if not youtube:
         return {}
 
     stats = {}
-    # Process in batches of 50
     for i in range(0, len(video_ids), 50):
         batch = video_ids[i:i + 50]
         try:
@@ -157,9 +136,7 @@ def fetch_youtube_data(
     queries: list[str] = None,
     max_per_query: int = None,
 ) -> pd.DataFrame:
-    """
-    Full pipeline: search all queries → fetch stats → return DataFrame.
-    """
+    """Full pipeline: search all queries -> fetch stats -> return DataFrame."""
     queries = queries or YOUTUBE_SEARCH_QUERIES
     max_per_query = max_per_query or YOUTUBE_MAX_RESULTS_PER_QUERY
 
@@ -190,7 +167,7 @@ def fetch_youtube_data(
             all_videos[vid].update(s)
 
     df = pd.DataFrame(all_videos.values())
-    print(f"  ✅ {len(df)} videos with statistics")
+    print(f"  {len(df)} videos with statistics")
     return df
 
 
@@ -204,7 +181,7 @@ def save_youtube_data(df: pd.DataFrame) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / "youtube_videos.csv"
     df.to_csv(path, index=False)
-    print(f"Saved → {path}")
+    print(f"Saved -> {path}")
     return path
 
 
@@ -232,4 +209,4 @@ if __name__ == "__main__":
             print(f"\nSummary:")
             print(df[["CONTENT_THEME", "VIEW_COUNT", "LIKE_COUNT"]].describe())
     else:
-        print("No API key or client. Use: python scripts/generate_seeds.py")
+        print("No API key or client. Run: python scripts/generate_seeds.py")

@@ -1,5 +1,5 @@
 """
-Demand Forecasting Engine (Module 01)
+Demand Forecasting Engine 
 =======================================
 Data Sources: Google Trends + Aviation Edge
 
@@ -15,7 +15,9 @@ import pandas as pd
 import numpy as np
 from typing import Optional
 from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
-from src.preprocessing.aviation import prepare_forecast_data
+
+# Import prepare_forecast_data from its new home in preprocessing
+from src.preprocessing.aviation import prepare_forecast_data  # noqa: F401
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -64,11 +66,7 @@ def train_prophet_model(
     test_months: int = 6,
     forecast_months: int = 12,
 ) -> dict:
-    """
-    Train Prophet with holidays + supply/demand regressors.
-
-    Returns dict: model, forecast, metrics, train, test
-    """
+    """Train Prophet with holidays + supply/demand regressors."""
     from prophet import Prophet
 
     if regressor_cols is None:
@@ -97,7 +95,6 @@ def train_prophet_model(
 
     model.fit(train)
 
-    # Future dataframe
     future = model.make_future_dataframe(periods=test_months + forecast_months, freq="MS")
 
     for col in regressor_cols:
@@ -106,7 +103,6 @@ def train_prophet_model(
 
     forecast = model.predict(future)
 
-    # Evaluate
     test_mask = forecast["ds"].isin(test["ds"])
     pred = forecast[test_mask].set_index("ds")["yhat"]
     actual = test.set_index("ds")["y"]
@@ -118,7 +114,7 @@ def train_prophet_model(
     else:
         mae, mape = np.nan, np.nan
 
-    print(f"\n  📊 MAE: {mae:,.0f}  |  MAPE: {mape:.1%}")
+    print(f"\n  MAE: {mae:,.0f}  |  MAPE: {mape:.1%}")
 
     return {
         "model": model,
@@ -145,7 +141,7 @@ def train_sarima_model(
     train = df.iloc[:-test_months].copy()
     test = df.iloc[-test_months:].copy()
 
-    print(f"SARIMA{order}×{seasonal_order} — Train: {len(train)}, Test: {len(test)}")
+    print(f"SARIMA{order}x{seasonal_order} — Train: {len(train)}, Test: {len(test)}")
 
     model = SARIMAX(train["y"], order=order, seasonal_order=seasonal_order,
                     enforce_stationarity=False, enforce_invertibility=False)
@@ -155,7 +151,7 @@ def train_sarima_model(
     mae = mean_absolute_error(test["y"], forecast)
     mape = mean_absolute_percentage_error(test["y"], forecast)
 
-    print(f"  📊 MAE: {mae:,.0f}  |  MAPE: {mape:.1%}  |  AIC: {fitted.aic:.0f}")
+    print(f"  MAE: {mae:,.0f}  |  MAPE: {mape:.1%}  |  AIC: {fitted.aic:.0f}")
 
     return {
         "model": fitted,
@@ -168,7 +164,7 @@ def train_sarima_model(
 
 
 # ═══════════════════════════════════════════════════════════════
-# SEARCH → DEMAND LAG ANALYSIS
+# SEARCH -> DEMAND LAG ANALYSIS
 # ═══════════════════════════════════════════════════════════════
 
 def analyze_search_demand_lag(
@@ -177,7 +173,7 @@ def analyze_search_demand_lag(
     demand_col: str = "y",
     max_lag: int = 6,
 ) -> pd.DataFrame:
-    """Test if Google Trends leads passenger demand by 0–N months."""
+    """Test if Google Trends leads passenger demand by 0-N months."""
     from scipy.stats import pearsonr
 
     results = []
@@ -201,7 +197,7 @@ def analyze_search_demand_lag(
     lag_df = pd.DataFrame(results)
     if not lag_df.empty:
         best = lag_df.loc[lag_df["correlation"].abs().idxmax()]
-        print(f"🔍 Best lag: {best['lag_months']} month(s) (r={best['correlation']}, p={best['p_value']})")
+        print(f"Best lag: {best['lag_months']} month(s) (r={best['correlation']}, p={best['p_value']})")
     return lag_df
 
 
@@ -229,8 +225,8 @@ def generate_push_timing(forecast: pd.DataFrame, lead_months: int = 3) -> pd.Dat
 
     peaks["SEASON"] = peaks["ds"].apply(season)
     peaks["RECOMMENDATION"] = peaks.apply(
-        lambda r: f"🚀 Push inventory {r['PUSH_START'].strftime('%b %Y')}–"
-                  f"{r['PUSH_END'].strftime('%b %Y')} → peak {r['ds'].strftime('%b %Y')} "
+        lambda r: f"Push inventory {r['PUSH_START'].strftime('%b %Y')}-"
+                  f"{r['PUSH_END'].strftime('%b %Y')} -> peak {r['ds'].strftime('%b %Y')} "
                   f"({r['yhat']:,.0f} est. passengers). {r['SEASON']}.",
         axis=1,
     )
@@ -249,7 +245,7 @@ def compare_models(prophet_res: dict, sarima_res: dict) -> pd.DataFrame:
          "MAPE%": sarima_res["metrics"]["mape_pct"], "AIC": sarima_res["aic"]},
     ])
     winner = "Prophet" if prophet_res["metrics"]["mape"] < sarima_res["metrics"]["mape"] else "SARIMA"
-    print(f"\n🏆 Winner: {winner}")
+    print(f"\nWinner: {winner}")
     print(comparison.to_string(index=False))
     return comparison
 
@@ -259,14 +255,13 @@ def compare_models(prophet_res: dict, sarima_res: dict) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    from src.data_collection.aviation_edge import generate_synthetic_monthly_capacity
-    from src.data_collection.google_trends import generate_synthetic_trends
-
     print("Demand Forecaster — Full Pipeline Test")
     print("=" * 50)
 
-    capacity = generate_synthetic_monthly_capacity()
-    trends = generate_synthetic_trends()
+    # Load seed data instead of generating synthetic
+    seeds_dir = Path("data/seeds")
+    capacity = pd.read_parquet(seeds_dir / "aviation_capacity.parquet")
+    trends = pd.read_parquet(seeds_dir / "google_trends.parquet")
 
     prophet_df = prepare_forecast_data(capacity, trends)
 

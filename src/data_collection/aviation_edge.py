@@ -1,10 +1,9 @@
 """
-Aviation Edge API Client (Data Source #4)
+Aviation Edge API Client 
 ==========================================
-Used in: M01 (Demand Forecasting), M06 (Visa & Friction Analysis)
 
 Provides:
-  - Flight routes: which airlines fly JFK/EWR → DXB, frequency
+  - Flight routes: which airlines fly JFK/EWR -> DXB, frequency
   - Flight schedules/timetables: departure times, days of week
   - Airline database: carrier details
 """
@@ -44,7 +43,7 @@ except ImportError:
 def _make_request(endpoint: str, params: dict) -> Optional[list]:
     """Make authenticated request to Aviation Edge API."""
     if not AVIATION_EDGE_API_KEY:
-        print("⚠️ AVIATION_EDGE_API_KEY not set in .env")
+        print("AVIATION_EDGE_API_KEY not set in .env")
         return None
 
     url = f"{AVIATION_EDGE_BASE_URL}{endpoint}"
@@ -66,24 +65,20 @@ def _make_request(endpoint: str, params: dict) -> Optional[list]:
 
 
 # ═══════════════════════════════════════════════════════════════
-# ROUTE DATA — Which airlines fly NYC → DXB
+# ROUTE DATA — Which airlines fly NYC -> DXB
 # ═══════════════════════════════════════════════════════════════
 
 def fetch_routes(
     origins: Optional[list[str]] = None,
     destination: Optional[str] = None,
 ) -> pd.DataFrame:
-    """
-    Fetch airline routes from NYC airports to Dubai.
-
-    Returns DataFrame with: airline, origin, destination, flight numbers.
-    """
+    """Fetch airline routes from NYC airports to Dubai."""
     origins = origins or ORIGIN_AIRPORTS
     destination = destination or DESTINATION_AIRPORT
 
     all_routes = []
     for origin in origins:
-        print(f"  Fetching routes: {origin} → {destination}")
+        print(f"  Fetching routes: {origin} -> {destination}")
         data = _make_request(
             AVIATION_EDGE_ENDPOINTS["routes"],
             {"departureIata": origin, "arrivalIata": destination},
@@ -92,16 +87,16 @@ def fetch_routes(
             for route in data:
                 route["queried_origin"] = origin
             all_routes.extend(data)
-            print(f"    ✓ {len(data)} route(s)")
+            print(f"    Got {len(data)} route(s)")
         else:
-            print(f"    ✗ No data / API error")
+            print(f"    No data / API error")
         time.sleep(1)
 
     if not all_routes:
         return pd.DataFrame()
 
     df = pd.DataFrame(all_routes)
-    print(f"\n✅ Total routes: {len(df)}")
+    print(f"Total routes: {len(df)}")
     return df
 
 
@@ -114,15 +109,7 @@ def fetch_timetable(
     destination: str = None,
     timetable_type: str = "departure",
 ) -> pd.DataFrame:
-    """
-    Fetch flight timetable (schedules) from an airport.
-
-    Parameters
-    ----------
-    origin : IATA airport code
-    destination : filter to specific destination (optional)
-    timetable_type : "departure" or "arrival"
-    """
+    """Fetch flight timetable (schedules) from an airport."""
     destination = destination or DESTINATION_AIRPORT
 
     print(f"Fetching timetable: {origin} departures to {destination}")
@@ -134,7 +121,6 @@ def fetch_timetable(
     if not data:
         return pd.DataFrame()
 
-    # The timetable response is nested — flatten key fields
     records = []
     for flight in data:
         try:
@@ -157,16 +143,15 @@ def fetch_timetable(
 
     df = pd.DataFrame(records)
 
-    # Filter to DXB destination
     if destination and "arrival_airport" in df.columns:
         df = df[df["arrival_airport"] == destination]
 
-    print(f"✅ Timetable: {len(df)} flights ({origin} → {destination})")
+    print(f"Timetable: {len(df)} flights ({origin} -> {destination})")
     return df
 
 
 # ═══════════════════════════════════════════════════════════════
-# AGGREGATE: ALL NYC → DXB FLIGHT DATA
+# AGGREGATE: ALL NYC -> DXB FLIGHT DATA
 # ═══════════════════════════════════════════════════════════════
 
 def fetch_all_nyc_dubai_flights() -> pd.DataFrame:
@@ -176,23 +161,19 @@ def fetch_all_nyc_dubai_flights() -> pd.DataFrame:
         flights = fetch_timetable(origin=origin)
         if not flights.empty:
             all_flights.append(flights)
-        time.sleep(2)  # rate-limit
+        time.sleep(2)
 
     if not all_flights:
-        print("⚠️ No flight data retrieved for any NYC airport.")
+        print("No flight data retrieved for any NYC airport.")
         return pd.DataFrame()
 
     combined = pd.concat(all_flights, ignore_index=True)
-    print(f"\n📊 Combined: {len(combined)} flights across {len(all_flights)} airports")
+    print(f"Combined: {len(combined)} flights across {len(all_flights)} airports")
     return combined
 
 
 def compute_flight_frequency(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Compute daily/weekly flight frequency by airline for demand analysis.
-
-    This is the key metric for M01: more flights = more capacity = demand signal.
-    """
+    """Compute daily/weekly flight frequency by airline for demand analysis."""
     if df.empty:
         return df
 
@@ -222,7 +203,7 @@ def save_aviation_data(df: pd.DataFrame, filename: str) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / filename
     df.to_csv(path, index=False)
-    print(f"Saved → {path}")
+    print(f"Saved -> {path}")
     return path
 
 
@@ -254,4 +235,4 @@ if __name__ == "__main__":
             print("\nAirline Frequency:")
             print(freq.to_string(index=False))
     else:
-        print("No API key. Use: python scripts/generate_seeds.py")
+        print("No API key. Run: python scripts/generate_seeds.py")

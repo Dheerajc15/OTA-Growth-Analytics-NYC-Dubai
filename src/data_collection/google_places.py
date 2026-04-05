@@ -1,8 +1,6 @@
 """
-Google Places API Client (Data Sources #1 & #2)
+Google Places API Client 
 =================================================
-Used in: M02 (Booking Funnel), M04 (Segmentation), M05 (Sentiment)
-
 Fetches hotel/accommodation data for Dubai and NYC:
   - Text Search: find hotels by query ("luxury hotels Dubai")
   - Place Details: ratings, reviews, price_level, photos, opening_hours
@@ -40,9 +38,7 @@ except ImportError:
 def _check_api_key() -> bool:
     """Verify the Google Cloud API key is set."""
     if not GOOGLE_CLOUD_API_KEY:
-        print("⚠️ GOOGLE_CLOUD_API_KEY not set in .env")
-        print("   Get one at: https://console.cloud.google.com/apis/credentials")
-        print("   Enable: 'Places API'")
+        print("GOOGLE_CLOUD_API_KEY not set in .env")
         return False
     return True
 
@@ -54,19 +50,7 @@ def text_search(
     place_type: str = "lodging",
     max_results: int = 60,
 ) -> list[dict]:
-    """
-    Google Places Text Search — find places by text query.
-
-    Parameters
-    ----------
-    query : e.g. "luxury hotels Dubai"
-    location : "lat,lng" (optional — improves relevance)
-    radius : search radius in meters (max 50km)
-    place_type : "lodging", "restaurant", etc.
-    max_results : max results across pagination (API gives 20 per page)
-
-    Returns list of raw Place dicts.
-    """
+    """Google Places Text Search — find places by text query."""
     if not _check_api_key():
         return []
 
@@ -111,9 +95,7 @@ def text_search(
 
 
 def get_place_details(place_id: str) -> Optional[dict]:
-    """
-    Fetch detailed info for a single place (reviews, price_level, etc.)
-    """
+    """Fetch detailed info for a single place (reviews, price_level, etc.)"""
     if not _check_api_key():
         return None
 
@@ -150,9 +132,7 @@ def fetch_hotels_for_market(
     max_per_query: int = 60,
     detail_delay: float = 0.3,
 ) -> pd.DataFrame:
-    """
-    Fetch hotel data for an entire market (Dubai or NYC).
-    """
+    """Fetch hotel data for an entire market (Dubai or NYC)."""
     print(f"\n{'='*60}")
     print(f"  Fetching {market_name} Hotels")
     print(f"  Queries: {len(queries)} | Details: {fetch_details}")
@@ -171,7 +151,7 @@ def fetch_hotels_for_market(
 
         time.sleep(1)
 
-    print(f"\n📍 Unique hotels found: {len(all_places)}")
+    print(f"\nUnique hotels found: {len(all_places)}")
 
     if not all_places:
         return pd.DataFrame()
@@ -195,7 +175,7 @@ def fetch_hotels_for_market(
         records.append(record)
 
     if fetch_details and _check_api_key():
-        print(f"\n📋 Fetching details for {len(records)} hotels...")
+        print(f"\nFetching details for {len(records)} hotels...")
         for i, record in enumerate(records):
             details = get_place_details(record["PLACE_ID"])
             if details:
@@ -223,10 +203,10 @@ def fetch_hotels_for_market(
                 print(f"    Details fetched: {i+1}/{len(records)}")
             time.sleep(detail_delay)
 
-        print(f"    ✅ Details complete for {len(records)} hotels")
+        print(f"    Details complete for {len(records)} hotels")
 
     df = pd.DataFrame(records)
-    print(f"\n✅ {market_name}: {len(df)} hotels loaded")
+    print(f"{market_name}: {len(df)} hotels loaded")
     return df
 
 
@@ -259,7 +239,7 @@ def fetch_both_markets(fetch_details: bool = True) -> pd.DataFrame:
     dubai = fetch_dubai_hotels(fetch_details=fetch_details)
     nyc = fetch_nyc_hotels(fetch_details=fetch_details)
     combined = pd.concat([dubai, nyc], ignore_index=True)
-    print(f"\n📊 Combined: {len(combined)} hotels ({len(dubai)} Dubai + {len(nyc)} NYC)")
+    print(f"Combined: {len(combined)} hotels ({len(dubai)} Dubai + {len(nyc)} NYC)")
     return combined
 
 
@@ -268,18 +248,16 @@ def fetch_both_markets(fetch_details: bool = True) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════
 
 def save_places_data(df: pd.DataFrame, market: str) -> Path:
-    """Save to data/raw/google_places_{market}/"""
     market_lower = market.lower().replace(" ", "_")
     output_dir = DATA_RAW / f"google_places_{market_lower}"
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{market_lower}_hotels.csv"
     df.to_csv(path, index=False)
-    print(f"Saved → {path}")
+    print(f"Saved -> {path}")
     return path
 
 
 def load_places_data(market: str) -> pd.DataFrame:
-    """Load from data/raw/google_places_{market}/"""
     market_lower = market.lower().replace(" ", "_")
     path = DATA_RAW / f"google_places_{market_lower}" / f"{market_lower}_hotels.csv"
     if not path.exists():
@@ -305,4 +283,4 @@ if __name__ == "__main__":
             print(f"\nSummary:")
             print(combined.groupby("MARKET")[["RATING", "TOTAL_RATINGS", "PRICE_LEVEL"]].describe())
     else:
-        print("No API key. Use: python scripts/generate_seeds.py")
+        print("No API key. Run: python scripts/generate_seeds.py")

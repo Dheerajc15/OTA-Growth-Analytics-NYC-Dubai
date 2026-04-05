@@ -2,9 +2,14 @@
 Generate deterministic seed data fixtures.
 ===========================================
 Run:  python scripts/generate_seeds.py
-      python scripts/generate_seeds.py --format csv   # optional CSV output
+      python scripts/generate_seeds.py --format csv  
 
 Writes to data/seeds/*.parquet (or .csv).
+"""
+
+"""
+Generate deterministic seed data fixtures.
+Run:  python scripts/generate_seeds.py
 """
 
 import argparse
@@ -14,14 +19,31 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Ensure project root is on sys.path so config.settings is importable
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from config.settings import (
-    DUBAI_LAT, DUBAI_LNG, NYC_LAT, NYC_LNG,
-    FARE_RANGES, AB_TEST_SAMPLE_SIZE, AB_TEST_SEED,
-    TRAVELER_ARCHETYPES,
-)
+try:
+    from config.settings import (
+        DUBAI_LAT, DUBAI_LNG, NYC_LAT, NYC_LNG,
+        FARE_RANGES, AB_TEST_SAMPLE_SIZE, AB_TEST_SEED,
+        TRAVELER_ARCHETYPES,
+    )
+except ImportError:
+    DUBAI_LAT, DUBAI_LNG = 25.2048, 55.2708
+    NYC_LAT, NYC_LNG = 40.7128, -74.0060
+    FARE_RANGES = {
+        "economy": {"min": 400, "max": 900, "mean": 620, "std": 130},
+        "business": {"min": 2500, "max": 6000, "mean": 3800, "std": 900},
+        "first": {"min": 8000, "max": 20000, "mean": 12000, "std": 3000},
+    }
+    AB_TEST_SAMPLE_SIZE = 10000
+    AB_TEST_SEED = 42
+    TRAVELER_ARCHETYPES = {
+        "business": {"stay_range": (2, 5), "fare_class": "business"},
+        "leisure": {"stay_range": (5, 14), "fare_class": "economy"},
+        "transit": {"stay_range": (1, 2), "fare_class": "economy"},
+    }
 
 SEEDS_DIR = ROOT / "data" / "seeds"
 

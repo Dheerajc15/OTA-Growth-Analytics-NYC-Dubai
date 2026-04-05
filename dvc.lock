@@ -1,0 +1,102 @@
+schema: '2.0'
+stages:
+  generate-seeds:
+    cmd: python scripts/generate_seeds.py --format parquet
+    deps:
+    - path: config/settings.py
+      hash: md5
+      md5: afb9f598762dd9f335e9ca7971a1f36d
+      size: 8530
+    - path: scripts/generate_seeds.py
+      hash: md5
+      md5: e4b54b14abc840e5944c1636cd6d9792
+      size: 27959
+    outs:
+    - path: data/seeds/ab_test.parquet
+      hash: md5
+      md5: db91c2e1591f947e08e3da4662107c86
+      size: 344473
+    - path: data/seeds/aviation_capacity.parquet
+      hash: md5
+      md5: dde3f94501115f680672710f16d50f2d
+      size: 9782
+    - path: data/seeds/aviation_flights.parquet
+      hash: md5
+      md5: 438b47fa3843e7288e476907966a0e20
+      size: 19127
+    - path: data/seeds/google_trends.parquet
+      hash: md5
+      md5: 66eb64067fdebc9004cf27db31cfda6a
+      size: 10685
+    - path: data/seeds/hotels.parquet
+      hash: md5
+      md5: 3ab05b4d8f0be94ccf508e08fa1b01f7
+      size: 46790
+    - path: data/seeds/youtube.parquet
+      hash: md5
+      md5: 665d17594f14b77a7ccd88d9b68c0627
+      size: 24747
+  preprocess:
+    cmd: python scripts/preprocess_all.py --source seeds
+    deps:
+    - path: data/seeds/aviation_capacity.parquet
+      hash: md5
+      md5: dde3f94501115f680672710f16d50f2d
+      size: 9782
+    - path: data/seeds/google_trends.parquet
+      hash: md5
+      md5: 66eb64067fdebc9004cf27db31cfda6a
+      size: 10685
+    - path: data/seeds/hotels.parquet
+      hash: md5
+      md5: 3ab05b4d8f0be94ccf508e08fa1b01f7
+      size: 46790
+    - path: data/seeds/youtube.parquet
+      hash: md5
+      md5: 665d17594f14b77a7ccd88d9b68c0627
+      size: 24747
+    - path: scripts/preprocess_all.py
+      hash: md5
+      md5: fb4bc4afa3e1fb068e805b9ae3382376
+      size: 3254
+    - path: src/preprocessing/aviation.py
+      hash: md5
+      md5: 34fbd3ac244e672b8374f8dda1a9f04e
+      size: 2209
+    - path: src/preprocessing/hotels.py
+      hash: md5
+      md5: bebc1ae791266415e4899c5f7b47c172
+      size: 2641
+    - path: src/preprocessing/travelers.py
+      hash: md5
+      md5: ba2f7bcb036f57388f7464207a8f5962
+      size: 8341
+    - path: src/preprocessing/trends.py
+      hash: md5
+      md5: 0ed56361bc81eaec02a4359946539bd9
+      size: 720
+    - path: src/preprocessing/youtube.py
+      hash: md5
+      md5: f602046ecaca22c7264e7722f288ce52
+      size: 1915
+    outs:
+    - path: data/processed/forecast_ready.parquet
+      hash: md5
+      md5: 73dc6e8af1bf904e19d40b39a7ca1131
+      size: 10427
+    - path: data/processed/hotels_prepared.parquet
+      hash: md5
+      md5: 61099776249b87000ac1e9b6621c6f12
+      size: 47480
+    - path: data/processed/traveler_profiles.parquet
+      hash: md5
+      md5: e3f1d0f32a9ada030f1c26c55a2bdc6c
+      size: 84391
+    - path: data/processed/trends_monthly.parquet
+      hash: md5
+      md5: 894a16a5891428f5b30860619b8938f4
+      size: 7329
+    - path: data/processed/youtube_prepared.parquet
+      hash: md5
+      md5: ab9a9536d0e2988df8533e62b9b0a4c1
+      size: 32547

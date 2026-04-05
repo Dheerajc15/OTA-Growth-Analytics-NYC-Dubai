@@ -1,28 +1,10 @@
 """
-Sentiment & Marketing Attribution Engine (Module 05)
+Sentiment & Marketing Attribution Engine
 ======================================================
 Data Sources: Google Places API — Dubai (#1) + YouTube Data API v3 (#5)
 
-Business Questions:
-  1. What do travelers actually SAY about Dubai hotels? (hotel review NLP)
-  2. Which YouTube content themes drive the most engagement for
-     NYC→Dubai travel? (marketing attribution)
-  3. How does sentiment correlate with hotel performance? (rating ↔ NLP)
-  4. What content gaps exist for the OTA to fill? (opportunity mapping)
-
-Approach:
-  Part A — Hotel Review Sentiment (Google Places Dubai)
-    • Extract review texts from synthetic hotel data
-    • VADER sentiment analysis per review
-    • Aggregate sentiment by hotel, neighborhood, price tier
-    • Identify sentiment drivers (topic extraction via keyword matching)
-
-  Part B — YouTube Marketing Attribution
-    • Analyze video performance by content theme
-    • Engagement rate analysis (likes/views, comments/views)
-    • Publish timing vs performance
-    • Channel archetype benchmarking
-    • Content gap identification
+Part A — Hotel Review Sentiment (Google Places Dubai)
+Part B — YouTube Marketing Attribution
 """
 
 import os
@@ -31,7 +13,6 @@ import pandas as pd
 import numpy as np
 from collections import Counter
 from typing import Optional
-from src.preprocessing.youtube import prepare_youtube_data 
 
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", str(os.cpu_count() or 4))
 
@@ -40,12 +21,15 @@ try:
     HAS_VADER = True
 except ImportError:
     HAS_VADER = False
-    print("⚠️ vaderSentiment not installed — run: pip install vaderSentiment")
+    print("vaderSentiment not installed — run: pip install vaderSentiment")
 
 try:
     from config.settings import AB_TEST_SEED
 except ImportError:
     AB_TEST_SEED = 42
+
+# Import prepare_youtube_data from its new home in preprocessing
+from src.preprocessing.youtube import prepare_youtube_data  # noqa: F401
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -55,7 +39,6 @@ except ImportError:
 def extract_reviews(hotel_df: pd.DataFrame) -> pd.DataFrame:
     """
     Extract individual reviews from the REVIEW_TEXTS column.
-
     REVIEW_TEXTS format: "review1 ||| review2 ||| review3"
     Returns one row per review with hotel metadata.
     """
@@ -85,16 +68,9 @@ def extract_reviews(hotel_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def analyze_review_sentiment(review_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Run VADER sentiment analysis on each review.
-
-    Adds:
-      - VADER_COMPOUND: -1 (most negative) to +1 (most positive)
-      - VADER_POS, VADER_NEU, VADER_NEG: component scores
-      - SENTIMENT_LABEL: "Positive" / "Neutral" / "Negative"
-    """
+    """Run VADER sentiment analysis on each review."""
     if not HAS_VADER:
-        print("⚠️ VADER not available — using fallback keyword sentiment")
+        print("VADER not available — using fallback keyword sentiment")
         return _fallback_sentiment(review_df)
 
     analyzer = SentimentIntensityAnalyzer()
@@ -109,7 +85,6 @@ def analyze_review_sentiment(review_df: pd.DataFrame) -> pd.DataFrame:
     df["VADER_NEU"] = sentiments.apply(lambda s: s["neu"])
     df["VADER_NEG"] = sentiments.apply(lambda s: s["neg"])
 
-    # Label
     df["SENTIMENT_LABEL"] = df["VADER_COMPOUND"].apply(
         lambda c: "Positive" if c >= 0.05
         else "Negative" if c <= -0.05
@@ -171,41 +146,15 @@ def _fallback_sentiment(review_df: pd.DataFrame) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════
 
 def extract_sentiment_topics(review_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Extract key topics from reviews using keyword matching.
-
-    Topics: location, service, price/value, room quality,
-            food/dining, amenities, cleanliness, views
-    """
+    """Extract key topics from reviews using keyword matching."""
     topic_keywords = {
-        "location": [
-            "location", "walkable", "close", "near", "access",
-            "subway", "central", "neighborhood", "area", "distance",
-        ],
-        "service": [
-            "service", "staff", "friendly", "helpful", "concierge",
-            "reception", "attentive", "rude", "slow",
-        ],
-        "price_value": [
-            "price", "expensive", "overpriced", "value", "worth",
-            "budget", "cheap", "cost", "money", "afford",
-        ],
-        "room_quality": [
-            "room", "bed", "bathroom", "clean", "modern",
-            "small", "tiny", "spacious", "comfortable", "uncomfortable",
-        ],
-        "food_dining": [
-            "breakfast", "restaurant", "food", "buffet", "bar",
-            "dining", "eat", "rooftop", "coffee",
-        ],
-        "amenities": [
-            "pool", "gym", "spa", "wifi", "ac", "parking",
-            "lounge", "fitness", "sauna",
-        ],
-        "views_ambiance": [
-            "view", "views", "skyline", "ocean", "stunning",
-            "beautiful", "desert", "sunset", "atmosphere",
-        ],
+        "location": ["location", "walkable", "close", "near", "access", "subway", "central", "neighborhood", "area", "distance"],
+        "service": ["service", "staff", "friendly", "helpful", "concierge", "reception", "attentive", "rude", "slow"],
+        "price_value": ["price", "expensive", "overpriced", "value", "worth", "budget", "cheap", "cost", "money", "afford"],
+        "room_quality": ["room", "bed", "bathroom", "clean", "modern", "small", "tiny", "spacious", "comfortable", "uncomfortable"],
+        "food_dining": ["breakfast", "restaurant", "food", "buffet", "bar", "dining", "eat", "rooftop", "coffee"],
+        "amenities": ["pool", "gym", "spa", "wifi", "ac", "parking", "lounge", "fitness", "sauna"],
+        "views_ambiance": ["view", "views", "skyline", "ocean", "stunning", "beautiful", "desert", "sunset", "atmosphere"],
     }
 
     df = review_df.copy()
@@ -216,13 +165,9 @@ def extract_sentiment_topics(review_df: pd.DataFrame) -> pd.DataFrame:
             pattern, regex=True, na=False
         ).astype(int)
 
-    # Primary topic (highest signal)
     topic_cols = [c for c in df.columns if c.startswith("TOPIC_")]
-    df["PRIMARY_TOPIC"] = df[topic_cols].idxmax(axis=1).str.replace(
-        "TOPIC_", "", regex=False
-    ).str.lower()
+    df["PRIMARY_TOPIC"] = df[topic_cols].idxmax(axis=1).str.replace("TOPIC_", "", regex=False).str.lower()
 
-    # Handle reviews with no topic match
     no_topic = df[topic_cols].sum(axis=1) == 0
     df.loc[no_topic, "PRIMARY_TOPIC"] = "general"
 
@@ -232,14 +177,8 @@ def extract_sentiment_topics(review_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def aggregate_sentiment_by_group(
-    review_df: pd.DataFrame,
-    group_col: str,
-) -> pd.DataFrame:
-    """
-    Aggregate sentiment scores by a grouping column
-    (MARKET, NEIGHBORHOOD, PRICE_TIER, HOTEL_NAME, etc.)
-    """
+def aggregate_sentiment_by_group(review_df: pd.DataFrame, group_col: str) -> pd.DataFrame:
+    """Aggregate sentiment scores by a grouping column."""
     agg = review_df.groupby(group_col).agg(
         REVIEW_COUNT=("REVIEW_TEXT", "count"),
         AVG_COMPOUND=("VADER_COMPOUND", "mean"),
@@ -255,33 +194,25 @@ def aggregate_sentiment_by_group(
 
 
 def sentiment_rating_correlation(review_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Analyze correlation between Google rating and VADER sentiment.
-    Groups by hotel and compares avg rating vs avg compound score.
-    """
+    """Analyze correlation between Google rating and VADER sentiment."""
     hotel_agg = review_df.groupby(["PLACE_ID", "HOTEL_NAME", "MARKET"]).agg(
         GOOGLE_RATING=("RATING", "first"),
         AVG_SENTIMENT=("VADER_COMPOUND", "mean"),
         REVIEW_COUNT=("REVIEW_TEXT", "count"),
     ).reset_index()
 
-    hotel_agg["GOOGLE_RATING"] = pd.to_numeric(
-        hotel_agg["GOOGLE_RATING"], errors="coerce"
-    )
+    hotel_agg["GOOGLE_RATING"] = pd.to_numeric(hotel_agg["GOOGLE_RATING"], errors="coerce")
 
     corr = hotel_agg[["GOOGLE_RATING", "AVG_SENTIMENT"]].corr().iloc[0, 1]
-    print(f"\nRating ↔ Sentiment correlation: {corr:.3f}")
+    print(f"\nRating <-> Sentiment correlation: {corr:.3f}")
 
-    # Identify mismatches (high rating but negative sentiment, or vice versa)
     hotel_agg["MISMATCH"] = "Aligned"
     hotel_agg.loc[
-        (hotel_agg["GOOGLE_RATING"] >= 4.0) &
-        (hotel_agg["AVG_SENTIMENT"] < 0),
+        (hotel_agg["GOOGLE_RATING"] >= 4.0) & (hotel_agg["AVG_SENTIMENT"] < 0),
         "MISMATCH",
     ] = "High Rating + Negative Sentiment"
     hotel_agg.loc[
-        (hotel_agg["GOOGLE_RATING"] < 3.5) &
-        (hotel_agg["AVG_SENTIMENT"] > 0.3),
+        (hotel_agg["GOOGLE_RATING"] < 3.5) & (hotel_agg["AVG_SENTIMENT"] > 0.3),
         "MISMATCH",
     ] = "Low Rating + Positive Sentiment"
 
@@ -296,25 +227,17 @@ def sentiment_rating_correlation(review_df: pd.DataFrame) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════
 
 def analyze_theme_performance(yt_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Performance breakdown by content theme.
-    """
+    """Performance breakdown by content theme."""
     if "CONTENT_THEME" not in yt_df.columns:
-        # Infer theme from SEARCH_QUERY if not present
         theme_map = {
-            "vlog": "travel_vlog",
-            "guide": "travel_guide",
-            "hotel": "hotel_review",
-            "things": "things_to_do",
-            "budget": "budget_planning",
-            "flying": "flight_review",
+            "vlog": "travel_vlog", "guide": "travel_guide",
+            "hotel": "hotel_review", "things": "things_to_do",
+            "budget": "budget_planning", "flying": "flight_review",
         }
         yt_df = yt_df.copy()
         yt_df["CONTENT_THEME"] = "other"
         for keyword, theme in theme_map.items():
-            mask = yt_df["SEARCH_QUERY"].str.lower().str.contains(
-                keyword, na=False
-            )
+            mask = yt_df["SEARCH_QUERY"].str.lower().str.contains(keyword, na=False)
             yt_df.loc[mask, "CONTENT_THEME"] = theme
 
     perf = yt_df.groupby("CONTENT_THEME").agg(
@@ -329,10 +252,7 @@ def analyze_theme_performance(yt_df: pd.DataFrame) -> pd.DataFrame:
         AVG_ENGAGEMENT=("ENGAGEMENT_RATE", "mean"),
     ).reset_index()
 
-    perf["VIEW_SHARE_PCT"] = (
-        perf["TOTAL_VIEWS"] / perf["TOTAL_VIEWS"].sum() * 100
-    ).round(1)
-
+    perf["VIEW_SHARE_PCT"] = (perf["TOTAL_VIEWS"] / perf["TOTAL_VIEWS"].sum() * 100).round(1)
     perf = perf.sort_values("TOTAL_VIEWS", ascending=False)
 
     print(f"\nTheme Performance:")
@@ -356,8 +276,7 @@ def analyze_publish_timing(yt_df: pd.DataFrame) -> pd.DataFrame:
         AVG_ENGAGEMENT=("ENGAGEMENT_RATE", "mean"),
     ).reset_index()
 
-    timing = timing.sort_values("PUBLISH_YEAR")
-    return timing.round(2)
+    return timing.sort_values("PUBLISH_YEAR").round(2)
 
 
 def analyze_channel_performance(yt_df: pd.DataFrame) -> pd.DataFrame:
@@ -373,51 +292,37 @@ def analyze_channel_performance(yt_df: pd.DataFrame) -> pd.DataFrame:
         AVG_LIKE_RATE=("LIKE_RATE", "mean"),
     ).reset_index()
 
-    ch_perf = ch_perf.sort_values("AVG_VIEWS", ascending=False)
-    return ch_perf.round(2)
+    return ch_perf.sort_values("AVG_VIEWS", ascending=False).round(2)
 
 
-def identify_content_gaps(
-    theme_perf: pd.DataFrame,
-    yt_df: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Identify content gaps — themes with high demand but low supply,
-    or high engagement but few creators.
-    """
+def identify_content_gaps(theme_perf: pd.DataFrame, yt_df: pd.DataFrame) -> pd.DataFrame:
+    """Identify content gaps — themes with high demand but low supply."""
     gaps = theme_perf.copy()
 
-    # Supply score (normalized video count)
     max_count = gaps["VIDEO_COUNT"].max() or 1
     gaps["SUPPLY_SCORE"] = (gaps["VIDEO_COUNT"] / max_count * 100).round(1)
 
-    # Demand score (normalized views)
     max_views = gaps["AVG_VIEWS"].max() or 1
     gaps["DEMAND_SCORE"] = (gaps["AVG_VIEWS"] / max_views * 100).round(1)
 
-    # Engagement score
     max_eng = gaps["AVG_ENGAGEMENT"].max() or 1
     gaps["ENGAGEMENT_SCORE"] = (gaps["AVG_ENGAGEMENT"] / max_eng * 100).round(1)
 
-    # Gap score = high demand × high engagement ÷ supply
     gaps["GAP_SCORE"] = (
         (gaps["DEMAND_SCORE"] * gaps["ENGAGEMENT_SCORE"])
         / gaps["SUPPLY_SCORE"].clip(lower=1)
     ).round(1)
 
-    # Opportunity label
     def _label(row):
         if row["GAP_SCORE"] > 150:
-            return "🔥 High Opportunity"
+            return "High Opportunity"
         elif row["GAP_SCORE"] > 80:
-            return "📈 Moderate Opportunity"
+            return "Moderate Opportunity"
         else:
-            return "✅ Well-Covered"
+            return "Well-Covered"
 
     gaps["OPPORTUNITY"] = gaps.apply(_label, axis=1)
-    gaps = gaps.sort_values("GAP_SCORE", ascending=False)
-
-    return gaps
+    return gaps.sort_values("GAP_SCORE", ascending=False)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -429,82 +334,40 @@ def generate_marketing_recommendations(
     content_gaps: pd.DataFrame,
     sentiment_by_market: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Generate actionable marketing recommendations combining
-    sentiment insights + YouTube content analysis.
-    """
+    """Generate actionable marketing recommendations."""
     recs = []
 
-    # From content gaps
-    high_opp = content_gaps[
-        content_gaps["OPPORTUNITY"].str.contains("High|Moderate")
-    ]
+    high_opp = content_gaps[content_gaps["OPPORTUNITY"].str.contains("High|Moderate")]
     for _, row in high_opp.iterrows():
         theme = row["CONTENT_THEME"]
 
         strategy_map = {
-            "budget_planning": {
-                "action": "Create 'Dubai on $X/day' content series",
-                "channel": "TikTok + YouTube Shorts",
-                "rationale": "High demand, low supply — budget-conscious NYC travelers need reassurance",
-            },
-            "hotel_review": {
-                "action": "Partner with micro-influencers for honest hotel reviews",
-                "channel": "YouTube long-form + Instagram Reels",
-                "rationale": "Review content builds trust for unfamiliar destination",
-            },
-            "things_to_do": {
-                "action": "Produce 'Top 10' listicle videos with bookable links",
-                "channel": "YouTube + Pinterest",
-                "rationale": "Activity content has high engagement and drives tour bookings",
-            },
-            "flight_review": {
-                "action": "Create airline comparison content (Emirates vs economy options)",
-                "channel": "YouTube + blog/SEO",
-                "rationale": "Flight reviews influence booking decisions and drive affiliate revenue",
-            },
-            "travel_vlog": {
-                "action": "Sponsor authentic vlogger trips NYC→Dubai",
-                "channel": "YouTube + TikTok",
-                "rationale": "Vlogs build emotional connection with destination",
-            },
-            "travel_guide": {
-                "action": "Produce comprehensive 'First Time in Dubai' guide",
-                "channel": "YouTube + OTA blog",
-                "rationale": "Guide content captures top-of-funnel search intent",
-            },
+            "budget_planning": {"action": "Create 'Dubai on $X/day' content series", "channel": "TikTok + YouTube Shorts", "rationale": "High demand, low supply"},
+            "hotel_review": {"action": "Partner with micro-influencers for honest hotel reviews", "channel": "YouTube long-form + Instagram Reels", "rationale": "Review content builds trust"},
+            "things_to_do": {"action": "Produce 'Top 10' listicle videos with bookable links", "channel": "YouTube + Pinterest", "rationale": "Activity content has high engagement"},
+            "flight_review": {"action": "Create airline comparison content", "channel": "YouTube + blog/SEO", "rationale": "Flight reviews influence booking decisions"},
+            "travel_vlog": {"action": "Sponsor authentic vlogger trips NYC->Dubai", "channel": "YouTube + TikTok", "rationale": "Vlogs build emotional connection"},
+            "travel_guide": {"action": "Produce comprehensive 'First Time in Dubai' guide", "channel": "YouTube + OTA blog", "rationale": "Guide content captures top-of-funnel search intent"},
         }
 
-        info = strategy_map.get(theme, {
-            "action": f"Explore content creation for '{theme}'",
-            "channel": "YouTube",
-            "rationale": "Underserved content theme with audience demand",
-        })
+        info = strategy_map.get(theme, {"action": f"Explore content creation for '{theme}'", "channel": "YouTube", "rationale": "Underserved content theme"})
 
         recs.append({
-            "THEME": theme,
-            "GAP_SCORE": row["GAP_SCORE"],
-            "OPPORTUNITY": row["OPPORTUNITY"],
-            "ACTION": info["action"],
-            "CHANNEL": info["channel"],
-            "RATIONALE": info["rationale"],
+            "THEME": theme, "GAP_SCORE": row["GAP_SCORE"],
+            "OPPORTUNITY": row["OPPORTUNITY"], **info,
         })
 
-    # From sentiment insights
     if not sentiment_by_market.empty:
         for _, row in sentiment_by_market.iterrows():
             market = row.get("MARKET", "Unknown")
             pct_neg = row.get("PCT_NEGATIVE", 0)
             if pct_neg > 20:
                 recs.append({
-                    "THEME": f"sentiment_{market.lower()}",
-                    "GAP_SCORE": pct_neg,
-                    "OPPORTUNITY": "⚠️ Sentiment Alert",
-                    "ACTION": f"Address negative review themes in {market} "
-                              f"hotel listings (highlight verified reviews)",
-                    "CHANNEL": "OTA platform UX",
-                    "RATIONALE": f"{pct_neg:.0f}% negative sentiment detected — "
-                                 f"proactive response needed",
+                    "THEME": f"sentiment_{market.lower()}", "GAP_SCORE": pct_neg,
+                    "OPPORTUNITY": "Sentiment Alert",
+                    "action": f"Address negative review themes in {market} hotel listings",
+                    "channel": "OTA platform UX",
+                    "rationale": f"{pct_neg:.0f}% negative sentiment detected",
                 })
 
     return pd.DataFrame(recs)
@@ -518,9 +381,7 @@ def run_full_sentiment_analysis(
     hotel_df: pd.DataFrame,
     youtube_df: pd.DataFrame,
 ) -> dict:
-    """
-    Run the complete M05 sentiment + marketing attribution pipeline.
-    """
+    """Run the complete M05 sentiment + marketing attribution pipeline."""
     print("\n" + "=" * 60)
     print("  M05: SENTIMENT & MARKETING ATTRIBUTION")
     print("=" * 60)
@@ -540,15 +401,9 @@ def run_full_sentiment_analysis(
         sentiment_reviews = analyze_review_sentiment(reviews)
         sentiment_reviews = extract_sentiment_topics(sentiment_reviews)
 
-        sentiment_by_market = aggregate_sentiment_by_group(
-            sentiment_reviews, "MARKET"
-        )
-        sentiment_by_tier = aggregate_sentiment_by_group(
-            sentiment_reviews, "PRICE_TIER"
-        )
-        sentiment_by_neighborhood = aggregate_sentiment_by_group(
-            sentiment_reviews, "NEIGHBORHOOD"
-        )
+        sentiment_by_market = aggregate_sentiment_by_group(sentiment_reviews, "MARKET")
+        sentiment_by_tier = aggregate_sentiment_by_group(sentiment_reviews, "PRICE_TIER")
+        sentiment_by_neighborhood = aggregate_sentiment_by_group(sentiment_reviews, "NEIGHBORHOOD")
         rating_corr = sentiment_rating_correlation(sentiment_reviews)
 
     # ── PART B: YouTube Marketing Attribution ──
@@ -566,19 +421,16 @@ def run_full_sentiment_analysis(
     )
 
     return {
-        # Part A
         "reviews": sentiment_reviews,
         "sentiment_by_market": sentiment_by_market,
         "sentiment_by_tier": sentiment_by_tier,
         "sentiment_by_neighborhood": sentiment_by_neighborhood,
         "rating_correlation": rating_corr,
-        # Part B
         "youtube_prepared": yt_prepared,
         "theme_performance": theme_perf,
         "publish_timing": publish_timing,
         "channel_performance": channel_perf,
         "content_gaps": content_gaps,
-        # Combined
         "recommendations": recommendations,
     }
 
@@ -588,13 +440,12 @@ def run_full_sentiment_analysis(
 # ═══════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    from src.data_collection.google_places import generate_synthetic_hotels
-    from src.analysis.funnel_analyzer import prepare_funnel_data
-    from src.data_collection.youtube_collector import generate_synthetic_youtube_data
+    from pathlib import Path
+    from src.preprocessing.hotels import prepare_funnel_data
 
-    hotels = generate_synthetic_hotels()
+    hotels = pd.read_parquet(Path("data/seeds/hotels.parquet"))
     hotels = prepare_funnel_data(hotels)
-    youtube = generate_synthetic_youtube_data()
+    youtube = pd.read_parquet(Path("data/seeds/youtube.parquet"))
 
     results = run_full_sentiment_analysis(hotels, youtube)
-    print("\n✅ M05 Sentiment & Marketing Attribution complete")
+    print("\nM05 Sentiment & Marketing Attribution complete")

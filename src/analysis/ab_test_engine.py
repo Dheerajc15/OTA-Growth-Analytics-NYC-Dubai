@@ -1,8 +1,6 @@
 """
-A/B Test Engine — Bundle vs Hotel-Only Pricing (Module 03)
+A/B Test Engine — Bundle vs Hotel-Only Pricing 
 ============================================================
-Data Source: Simulated Fare Data (numpy) — Data Source #6
-
 Business Question:
   "Does offering a flight+hotel bundle at a 12-15% discount increase
    booking conversion enough to offset the per-booking margin loss?"
@@ -24,6 +22,7 @@ Statistical Methods:
 
 import pandas as pd
 import numpy as np
+from pathlib import Path
 from typing import Optional
 from scipy import stats
 
@@ -40,18 +39,36 @@ except ImportError:
     AB_TEST_SAMPLE_SIZE = 10000
     AB_TEST_SEED = 42
 
+
+# ═══════════════════════════════════════════════════════════════
+# SEED DATA LOADER (replaces generate_ab_test_data)
+# ═══════════════════════════════════════════════════════════════
+
 def load_ab_test_data() -> pd.DataFrame:
-    """Load A/B test data from seeds (replaces generate_ab_test_data)."""
-    from config.settings import SEEDS_DIR
-    path = SEEDS_DIR / "ab_test.parquet"
-    if path.exists():
-        return pd.read_parquet(path)
-    csv_path = SEEDS_DIR / "ab_test.csv"
+    """
+    Load A/B test data from data/seeds/.
+
+    Run `python scripts/generate_seeds.py` first to create the fixture.
+    """
+    try:
+        from config.settings import ROOT_DIR
+        seeds_dir = ROOT_DIR / "data" / "seeds"
+    except ImportError:
+        seeds_dir = Path("data/seeds")
+
+    parquet_path = seeds_dir / "ab_test.parquet"
+    if parquet_path.exists():
+        return pd.read_parquet(parquet_path)
+
+    csv_path = seeds_dir / "ab_test.csv"
     if csv_path.exists():
         return pd.read_csv(csv_path)
+
     raise FileNotFoundError(
-        f"No A/B test seed data found. Run: python scripts/generate_seeds.py"
+        f"No A/B test seed data at {seeds_dir}. "
+        "Run: python scripts/generate_seeds.py"
     )
+
 
 # ═══════════════════════════════════════════════════════════════
 # PRE-TEST VALIDATION (SRM CHECK)
@@ -60,7 +77,6 @@ def load_ab_test_data() -> pd.DataFrame:
 def check_sample_ratio_mismatch(df: pd.DataFrame) -> dict:
     """
     Sample Ratio Mismatch (SRM) test — verifies randomization is clean.
-
     If p < 0.01, the split is suspicious (instrumentation bug, bot traffic, etc.)
     """
     counts = df["GROUP"].value_counts()
@@ -79,11 +95,11 @@ def check_sample_ratio_mismatch(df: pd.DataFrame) -> dict:
         "chi2_statistic": round(chi2, 4),
         "p_value": round(p_value, 4),
         "srm_detected": p_value < 0.01,
-        "verdict": "⚠️ SRM DETECTED — check randomization" if p_value < 0.01
-                   else "✅ No SRM — randomization looks clean",
+        "verdict": "SRM DETECTED — check randomization" if p_value < 0.01
+                   else "No SRM — randomization looks clean",
     }
 
-    print(f"SRM Check: χ²={result['chi2_statistic']}, p={result['p_value']}")
+    print(f"SRM Check: chi2={result['chi2_statistic']}, p={result['p_value']}")
     print(f"  {result['verdict']}")
     return result
 
@@ -95,7 +111,6 @@ def check_covariate_balance(df: pd.DataFrame) -> pd.DataFrame:
     """
     results = []
 
-    # Categorical balance
     for col in ["FARE_CLASS", "TRAVELER_TYPE", "DEVICE"]:
         ct = pd.crosstab(df["GROUP"], df[col])
         chi2, p, dof, _ = stats.chi2_contingency(ct)
@@ -107,7 +122,6 @@ def check_covariate_balance(df: pd.DataFrame) -> pd.DataFrame:
             "BALANCED": p > 0.05,
         })
 
-    # Numerical balance
     for col in ["HOTEL_PRICE", "LEAD_TIME_DAYS"]:
         control_vals = df[df["GROUP"] == "control"][col]
         treatment_vals = df[df["GROUP"] == "treatment"][col]
@@ -131,11 +145,7 @@ def check_covariate_balance(df: pd.DataFrame) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════
 
 def run_conversion_test(df: pd.DataFrame, alpha: float = 0.05) -> dict:
-    """
-    Primary A/B test: two-proportion z-test on conversion rates.
-
-    Returns dict with all key metrics, test statistics, and verdict.
-    """
+    """Primary A/B test: two-proportion z-test on conversion rates."""
     control = df[df["GROUP"] == "control"]
     treatment = df[df["GROUP"] == "treatment"]
 
@@ -145,24 +155,19 @@ def run_conversion_test(df: pd.DataFrame, alpha: float = 0.05) -> dict:
     p_c = x_c / n_c
     p_t = x_t / n_t
 
-    # Pooled proportion
     p_pool = (x_c + x_t) / (n_c + n_t)
     se = np.sqrt(p_pool * (1 - p_pool) * (1/n_c + 1/n_t))
 
     z_stat = (p_t - p_c) / se if se > 0 else 0
-    p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))  # two-tailed
+    p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
 
-    # Confidence interval for the difference
     se_diff = np.sqrt(p_c * (1 - p_c) / n_c + p_t * (1 - p_t) / n_t)
     z_crit = stats.norm.ppf(1 - alpha / 2)
     diff = p_t - p_c
     ci_lower = diff - z_crit * se_diff
     ci_upper = diff + z_crit * se_diff
 
-    # Relative lift
     relative_lift = (p_t - p_c) / p_c if p_c > 0 else 0
-
-    # Effect size: Cohen's h
     cohens_h = 2 * (np.arcsin(np.sqrt(p_t)) - np.arcsin(np.sqrt(p_c)))
 
     result = {
@@ -187,10 +192,10 @@ def run_conversion_test(df: pd.DataFrame, alpha: float = 0.05) -> dict:
             "medium" if abs(cohens_h) < 0.8 else "large"
         ),
         "verdict": (
-            f"🟢 SIGNIFICANT (p={p_value:.4f}): Bundle increases CVR by "
+            f"SIGNIFICANT (p={p_value:.4f}): Bundle increases CVR by "
             f"{relative_lift:.1%} (absolute +{diff:.3%})"
             if p_value < alpha else
-            f"🔴 NOT SIGNIFICANT (p={p_value:.4f}): No detectable difference"
+            f"NOT SIGNIFICANT (p={p_value:.4f}): No detectable difference"
         ),
     }
 
@@ -209,10 +214,7 @@ def run_conversion_test(df: pd.DataFrame, alpha: float = 0.05) -> dict:
 
 
 def run_chi_square_test(df: pd.DataFrame) -> dict:
-    """
-    Chi-square test of independence: GROUP × CONVERTED.
-    Complements the z-test (should give identical p-value for 2×2).
-    """
+    """Chi-square test of independence: GROUP x CONVERTED."""
     ct = pd.crosstab(df["GROUP"], df["CONVERTED"])
     chi2, p_value, dof, expected = stats.chi2_contingency(ct)
 
@@ -224,7 +226,7 @@ def run_chi_square_test(df: pd.DataFrame) -> dict:
         "significant": p_value < 0.05,
     }
 
-    print(f"Chi-square: χ²={chi2:.4f}, p={p_value:.5f}, dof={dof}")
+    print(f"Chi-square: chi2={chi2:.4f}, p={p_value:.5f}, dof={dof}")
     return result
 
 
@@ -238,10 +240,7 @@ def bootstrap_conversion_diff(
     confidence: float = 0.95,
     seed: int = None,
 ) -> dict:
-    """
-    Non-parametric bootstrap CI for the conversion rate difference.
-    More robust than normal approximation for small effect sizes.
-    """
+    """Non-parametric bootstrap CI for the conversion rate difference."""
     seed = seed or AB_TEST_SEED
     rng = np.random.RandomState(seed)
 
@@ -267,7 +266,7 @@ def bootstrap_conversion_diff(
         "confidence": confidence,
         "n_bootstrap": n_bootstrap,
         "pct_positive": round((diffs > 0).mean() * 100, 2),
-        "bootstrap_diffs": diffs,  # for plotting
+        "bootstrap_diffs": diffs,
     }
 
     print(f"Bootstrap ({n_bootstrap:,} iterations):")
@@ -283,29 +282,20 @@ def bootstrap_conversion_diff(
 # ═══════════════════════════════════════════════════════════════
 
 def analyze_revenue(df: pd.DataFrame) -> dict:
-    """
-    Compare revenue metrics between groups.
-
-    Key insight: Bundle may have higher CVR but lower per-booking revenue
-    due to discount. Net effect on revenue-per-visitor is what matters.
-    """
+    """Compare revenue metrics between groups."""
     control = df[df["GROUP"] == "control"]
     treatment = df[df["GROUP"] == "treatment"]
 
-    # Revenue per visitor (RPV) — the metric that matters
     rpv_control = control["REVENUE"].sum() / len(control)
     rpv_treatment = treatment["REVENUE"].sum() / len(treatment)
     rpv_lift = (rpv_treatment - rpv_control) / rpv_control if rpv_control > 0 else 0
 
-    # Average order value (only among converters)
     aov_control = control[control["CONVERTED"] == 1]["REVENUE"].mean()
     aov_treatment = treatment[treatment["CONVERTED"] == 1]["REVENUE"].mean()
 
-    # Total revenue
     total_rev_control = control["REVENUE"].sum()
     total_rev_treatment = treatment["REVENUE"].sum()
 
-    # Revenue by fare class
     rev_by_fare = (
         df.groupby(["GROUP", "FARE_CLASS"])
         .agg(
@@ -339,7 +329,6 @@ def analyze_revenue(df: pd.DataFrame) -> dict:
     print(f"  RPV Treatment: ${rpv_treatment:,.2f}  ({rpv_lift:+.1%})")
     print(f"  AOV Control:   ${aov_control:,.2f}")
     print(f"  AOV Treatment: ${aov_treatment:,.2f}  ({result['aov_change_pct']:+.1f}%)")
-    print(f"\n  💡 Bundle discount lowers AOV but higher CVR {'increases' if rpv_lift > 0 else 'does NOT offset'} RPV")
 
     return result
 
@@ -349,10 +338,7 @@ def analyze_revenue(df: pd.DataFrame) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def analyze_segments(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Break down A/B test results by key segments.
-    Identifies which traveler groups benefit most from bundling.
-    """
+    """Break down A/B test results by key segments."""
     segments = []
 
     for segment_col in ["FARE_CLASS", "TRAVELER_TYPE", "DEVICE"]:
@@ -371,7 +357,6 @@ def analyze_segments(df: pd.DataFrame) -> pd.DataFrame:
             rpv_c = control["REVENUE"].sum() / len(control)
             rpv_t = treatment["REVENUE"].sum() / len(treatment)
 
-            # Quick z-test per segment
             p_pool = seg_df["CONVERTED"].mean()
             se = np.sqrt(p_pool * (1 - p_pool) * (1/len(control) + 1/len(treatment)))
             z = (cvr_t - cvr_c) / se if se > 0 else 0
@@ -409,12 +394,7 @@ def simulate_sequential_test(
     check_points: int = 20,
     alpha_spending: str = "obrien_fleming",
 ) -> pd.DataFrame:
-    """
-    Simulate sequential monitoring of the A/B test.
-
-    Shows what the test result would have been at each checkpoint.
-    Uses O'Brien-Fleming-like alpha spending to control false positives.
-    """
+    """Simulate sequential monitoring of the A/B test."""
     n = len(df)
     step_size = n // check_points
     alpha_total = 0.05
@@ -439,13 +419,12 @@ def simulate_sequential_test(
         z = diff / se if se > 0 else 0
         p_val = 2 * (1 - stats.norm.cdf(abs(z)))
 
-        # O'Brien-Fleming spending: very conservative early, relaxed late
         info_fraction = i / check_points
         if alpha_spending == "obrien_fleming":
             z_boundary = stats.norm.ppf(1 - alpha_total / (2 * np.sqrt(info_fraction)))
             spent_alpha = 2 * (1 - stats.norm.cdf(z_boundary))
         else:
-            spent_alpha = alpha_total * info_fraction  # Pocock
+            spent_alpha = alpha_total * info_fraction
 
         results.append({
             "CHECKPOINT": i,
@@ -472,7 +451,7 @@ def simulate_sequential_test(
     return seq_df
 
 
-# ═════════════��═════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # POWER ANALYSIS
 # ═══════════════════════════════════════════════════════════════
 
@@ -482,13 +461,10 @@ def compute_required_sample_size(
     alpha: float = 0.05,
     power: float = 0.80,
 ) -> dict:
-    """
-    Compute minimum sample size per group for a two-proportion z-test.
-    """
+    """Compute minimum sample size per group for a two-proportion z-test."""
     p1 = baseline_cvr
     p2 = baseline_cvr * (1 + min_detectable_lift)
 
-    # Cohen's h
     h = 2 * (np.arcsin(np.sqrt(p2)) - np.arcsin(np.sqrt(p1)))
 
     z_alpha = stats.norm.ppf(1 - alpha / 2)
@@ -511,10 +487,10 @@ def compute_required_sample_size(
     }
 
     print(f"\nPower Analysis:")
-    print(f"  Baseline CVR: {p1:.2%} → Target: {p2:.2%} (MDE: {min_detectable_lift:.0%} lift)")
+    print(f"  Baseline CVR: {p1:.2%} -> Target: {p2:.2%} (MDE: {min_detectable_lift:.0%} lift)")
     print(f"  Required: {n_per_group:,}/group = {n_total:,} total")
     print(f"  Current:  {AB_TEST_SAMPLE_SIZE:,}")
-    print(f"  {'✅ Adequately powered' if result['adequately_powered'] else '⚠️ UNDERPOWERED'}")
+    print(f"  {'Adequately powered' if result['adequately_powered'] else 'UNDERPOWERED'}")
 
     return result
 
@@ -528,11 +504,9 @@ def project_incremental_revenue(
     revenue_result: dict,
     monthly_visitors: int = 500_000,
 ) -> pd.DataFrame:
-    """
-    Project annualized incremental revenue from rolling out the bundle.
-    """
+    """Project annualized incremental revenue from rolling out the bundle."""
     if not test_result["significant"]:
-        print("⚠️ Test not significant — projections are speculative")
+        print("Test not significant — projections are speculative")
 
     rpv_lift = revenue_result["rpv_treatment"] - revenue_result["rpv_control"]
 
@@ -561,43 +535,28 @@ def project_incremental_revenue(
     return proj_df
 
 
-# ════════════════════════════════════════��══════════════════════
+# ═══════════════════════════════════════════════════════════════
 # FULL PIPELINE
 # ═══════════════════════════════════════════════════════════════
 
 def run_full_ab_analysis(df: pd.DataFrame = None) -> dict:
     """Run the complete A/B test analysis pipeline."""
     if df is None:
-        df = generate_ab_test_data()
+        df = load_ab_test_data()
 
     print("\n" + "=" * 60)
     print("  M03: A/B TEST — BUNDLE vs HOTEL-ONLY PRICING")
     print("=" * 60)
 
-    # 1. Pre-test checks
     srm = check_sample_ratio_mismatch(df)
     balance = check_covariate_balance(df)
-
-    # 2. Primary test
     test_result = run_conversion_test(df)
     chi2_result = run_chi_square_test(df)
-
-    # 3. Bootstrap
     bootstrap = bootstrap_conversion_diff(df)
-
-    # 4. Revenue
     revenue = analyze_revenue(df)
-
-    # 5. Segments
     segments = analyze_segments(df)
-
-    # 6. Sequential
     sequential = simulate_sequential_test(df)
-
-    # 7. Power
     power = compute_required_sample_size()
-
-    # 8. Projection
     projection = project_incremental_revenue(test_result, revenue)
 
     return {
@@ -621,4 +580,4 @@ def run_full_ab_analysis(df: pd.DataFrame = None) -> dict:
 
 if __name__ == "__main__":
     results = run_full_ab_analysis()
-    print("\n✅ M03 A/B Test pipeline complete")
+    print("\nM03 A/B Test pipeline complete")
