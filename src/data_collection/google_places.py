@@ -1,19 +1,12 @@
-"""
-Google Places API Client 
-=================================================
-Fetches hotel/accommodation data for Dubai and NYC:
-  - Text Search: find hotels by query ("luxury hotels Dubai")
-  - Place Details: ratings, reviews, price_level, photos, opening_hours
-  - Nearby Search: hotels within radius of coordinates
-"""
+from __future__ import annotations
 
-import requests
-import pandas as pd
-import numpy as np
 import time
-import json
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
+import pandas as pd
+import requests
 
 try:
     from config.settings import (
@@ -31,14 +24,9 @@ except ImportError:
     NYC_LAT, NYC_LNG = 40.7128, -74.0060
 
 
-# ═══════════════════════════════════════════════════════════════
-# LOW-LEVEL API CALLS
-# ═══════════════════════════════════════════════════════════════
-
 def _check_api_key() -> bool:
-    """Verify the Google Cloud API key is set."""
     if not GOOGLE_CLOUD_API_KEY:
-        print("GOOGLE_CLOUD_API_KEY not set in .env")
+        print("⚠️ GOOGLE_CLOUD_API_KEY not set in .env")
         return False
     return True
 
@@ -50,16 +38,11 @@ def text_search(
     place_type: str = "lodging",
     max_results: int = 60,
 ) -> list[dict]:
-    """Google Places Text Search — find places by text query."""
     if not _check_api_key():
         return []
 
     url = f"{GOOGLE_PLACES_BASE_URL}/textsearch/json"
-    params = {
-        "query": query,
-        "type": place_type,
-        "key": GOOGLE_CLOUD_API_KEY,
-    }
+    params = {"query": query, "type": place_type, "key": GOOGLE_CLOUD_API_KEY}
     if location:
         params["location"] = location
         params["radius"] = radius
@@ -68,26 +51,28 @@ def text_search(
     page = 1
 
     while True:
-        resp = requests.get(url, params=params, timeout=30)
-        data = resp.json()
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+            data = resp.json()
+        except Exception as e:
+            print(f"    Request error: {e}")
+            break
 
         status = data.get("status", "UNKNOWN")
         if status != "OK":
-            if status == "ZERO_RESULTS":
-                print(f"    No results for: '{query}'")
-            else:
+            if status != "ZERO_RESULTS":
                 print(f"    API error ({status}): {data.get('error_message', '')}")
             break
 
         results = data.get("results", [])
         all_results.extend(results)
-        print(f"    Page {page}: +{len(results)} places (total: {len(all_results)})")
+        print(f"    Page {page}: +{len(results)} (total: {len(all_results)})")
 
         next_token = data.get("next_page_token")
         if not next_token or len(all_results) >= max_results:
             break
 
-        time.sleep(2.5)
+        time.sleep(2.5)  # token warmup
         params = {"pagetoken": next_token, "key": GOOGLE_CLOUD_API_KEY}
         page += 1
 
@@ -95,7 +80,6 @@ def text_search(
 
 
 def get_place_details(place_id: str) -> Optional[dict]:
-    """Fetch detailed info for a single place (reviews, price_level, etc.)"""
     if not _check_api_key():
         return None
 
@@ -105,24 +89,18 @@ def get_place_details(place_id: str) -> Optional[dict]:
         "geometry,types,reviews,website,url,photos,business_status,"
         "opening_hours,formatted_phone_number"
     )
-    params = {
-        "place_id": place_id,
-        "fields": fields,
-        "key": GOOGLE_CLOUD_API_KEY,
-    }
+    params = {"place_id": place_id, "fields": fields, "key": GOOGLE_CLOUD_API_KEY}
 
-    resp = requests.get(url, params=params, timeout=30)
-    data = resp.json()
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+        data = resp.json()
+    except Exception:
+        return None
 
     if data.get("status") != "OK":
         return None
-
     return data.get("result")
 
-
-# ═══════════════════════════════════════════════════════════════
-# HIGH-LEVEL: FETCH HOTEL DATA FOR A MARKET
-# ═══════════════════════════════════════════════════════════════
 
 def fetch_hotels_for_market(
     queries: list[str],
@@ -132,26 +110,20 @@ def fetch_hotels_for_market(
     max_per_query: int = 60,
     detail_delay: float = 0.3,
 ) -> pd.DataFrame:
-    """Fetch hotel data for an entire market (Dubai or NYC)."""
     print(f"\n{'='*60}")
     print(f"  Fetching {market_name} Hotels")
     print(f"  Queries: {len(queries)} | Details: {fetch_details}")
     print(f"{'='*60}")
 
     all_places = {}
-
     for i, query in enumerate(queries):
         print(f"\n[{i+1}/{len(queries)}] '{query}'")
         results = text_search(query, location=location, max_results=max_per_query)
-
         for place in results:
             pid = place.get("place_id")
             if pid and pid not in all_places:
                 all_places[pid] = place
-
         time.sleep(1)
-
-    print(f"\nUnique hotels found: {len(all_places)}")
 
     if not all_places:
         return pd.DataFrame()
@@ -159,7 +131,7 @@ def fetch_hotels_for_market(
     records = []
     for pid, place in all_places.items():
         geo = place.get("geometry", {}).get("location", {})
-        record = {
+        records.append({
             "PLACE_ID": pid,
             "NAME": place.get("name", ""),
             "MARKET": market_name,
@@ -171,51 +143,45 @@ def fetch_hotels_for_market(
             "LNG": geo.get("lng"),
             "BUSINESS_STATUS": place.get("business_status", ""),
             "TYPES": ", ".join(place.get("types", [])),
-        }
-        records.append(record)
+            "WEBSITE": "",
+            "GOOGLE_URL": "",
+            "PHONE": "",
+            "NUM_PHOTOS": 0,
+            "NUM_REVIEWS_FETCHED": 0,
+            "AVG_REVIEW_RATING": None,
+            "REVIEW_TEXTS": "",
+            "OPEN_NOW": None,
+        })
 
     if fetch_details and _check_api_key():
-        print(f"\nFetching details for {len(records)} hotels...")
-        for i, record in enumerate(records):
-            details = get_place_details(record["PLACE_ID"])
+        print(f"\n📋 Fetching details for {len(records)} hotels...")
+        for i, rec in enumerate(records):
+            details = get_place_details(rec["PLACE_ID"])
             if details:
-                record["WEBSITE"] = details.get("website", "")
-                record["GOOGLE_URL"] = details.get("url", "")
-                record["PHONE"] = details.get("formatted_phone_number", "")
-                record["NUM_PHOTOS"] = len(details.get("photos", []))
+                rec["WEBSITE"] = details.get("website", "")
+                rec["GOOGLE_URL"] = details.get("url", "")
+                rec["PHONE"] = details.get("formatted_phone_number", "")
+                rec["NUM_PHOTOS"] = len(details.get("photos", []))
 
                 reviews = details.get("reviews", [])
-                record["NUM_REVIEWS_FETCHED"] = len(reviews)
+                rec["NUM_REVIEWS_FETCHED"] = len(reviews)
                 if reviews:
-                    review_ratings = [r.get("rating", 0) for r in reviews]
-                    record["AVG_REVIEW_RATING"] = round(np.mean(review_ratings), 2)
-                    record["REVIEW_TEXTS"] = " ||| ".join(
-                        [r.get("text", "") for r in reviews if r.get("text")]
-                    )
-                else:
-                    record["AVG_REVIEW_RATING"] = None
-                    record["REVIEW_TEXTS"] = ""
+                    rr = [r.get("rating", 0) for r in reviews]
+                    rec["AVG_REVIEW_RATING"] = round(float(np.mean(rr)), 2)
+                    rec["REVIEW_TEXTS"] = " ||| ".join([r.get("text", "") for r in reviews if r.get("text")])
 
-                oh = details.get("opening_hours", {})
-                record["OPEN_NOW"] = oh.get("open_now")
+                rec["OPEN_NOW"] = details.get("opening_hours", {}).get("open_now")
 
             if (i + 1) % 25 == 0:
                 print(f"    Details fetched: {i+1}/{len(records)}")
             time.sleep(detail_delay)
 
-        print(f"    Details complete for {len(records)} hotels")
-
     df = pd.DataFrame(records)
-    print(f"{market_name}: {len(df)} hotels loaded")
+    print(f"\n✅ {market_name}: {len(df)} hotels loaded")
     return df
 
 
-# ═══════════════════════════════════════════════════════════════
-# CONVENIENCE: FETCH BOTH MARKETS
-# ═══════════════════════════════════════════════════════════════
-
 def fetch_dubai_hotels(fetch_details: bool = True) -> pd.DataFrame:
-    """Fetch all Dubai hotel data."""
     return fetch_hotels_for_market(
         queries=PLACES_DUBAI_QUERIES,
         market_name="Dubai",
@@ -225,7 +191,6 @@ def fetch_dubai_hotels(fetch_details: bool = True) -> pd.DataFrame:
 
 
 def fetch_nyc_hotels(fetch_details: bool = True) -> pd.DataFrame:
-    """Fetch all NYC hotel data."""
     return fetch_hotels_for_market(
         queries=PLACES_NYC_QUERIES,
         market_name="NYC",
@@ -235,25 +200,18 @@ def fetch_nyc_hotels(fetch_details: bool = True) -> pd.DataFrame:
 
 
 def fetch_both_markets(fetch_details: bool = True) -> pd.DataFrame:
-    """Fetch Dubai + NYC and combine into single DataFrame."""
     dubai = fetch_dubai_hotels(fetch_details=fetch_details)
     nyc = fetch_nyc_hotels(fetch_details=fetch_details)
-    combined = pd.concat([dubai, nyc], ignore_index=True)
-    print(f"Combined: {len(combined)} hotels ({len(dubai)} Dubai + {len(nyc)} NYC)")
-    return combined
+    return pd.concat([dubai, nyc], ignore_index=True)
 
-
-# ═══════════════════════════════════════════════════════════════
-# SAVE / LOAD
-# ═══════════════════════════════════════════════════════════════
 
 def save_places_data(df: pd.DataFrame, market: str) -> Path:
     market_lower = market.lower().replace(" ", "_")
-    output_dir = DATA_RAW / f"google_places_{market_lower}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{market_lower}_hotels.csv"
+    out_dir = DATA_RAW / f"google_places_{market_lower}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{market_lower}_hotels.csv"
     df.to_csv(path, index=False)
-    print(f"Saved -> {path}")
+    print(f"Saved → {path}")
     return path
 
 
@@ -265,22 +223,5 @@ def load_places_data(market: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-# ═══════════════════════════════════════════════════════════════
-# CLI TEST
-# ═══════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    print("Google Places API — Hotel Data Collector")
-    print("=" * 50)
-
-    if GOOGLE_CLOUD_API_KEY:
-        print(f"API key: {GOOGLE_CLOUD_API_KEY[:8]}...\n")
-        combined = fetch_both_markets(fetch_details=True)
-        if not combined.empty:
-            for market in ["Dubai", "NYC"]:
-                mdf = combined[combined["MARKET"] == market]
-                save_places_data(mdf, market)
-            print(f"\nSummary:")
-            print(combined.groupby("MARKET")[["RATING", "TOTAL_RATINGS", "PRICE_LEVEL"]].describe())
-    else:
-        print("No API key. Run: python scripts/generate_seeds.py")
+# Backward-compatible alias
+fetch_google_places_data = fetch_both_markets

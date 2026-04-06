@@ -1,279 +1,165 @@
-"""
-Demand Forecasting Engine (Module 01)
-=======================================
-Data Sources: Google Trends + Aviation Edge
 
-Answers: "When should a platform push Dubai inventory to NYC users —
-and how far in advance?"
+from __future__ import annotations
 
-Models:
-  1. Prophet — Ramadan holidays + Google Trends regressors + capacity supply
-  2. SARIMA — classical baseline with monthly seasonality
-"""
-
-import pandas as pd
+from dataclasses import dataclass
 import numpy as np
-from typing import Optional
-from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error
-
-# Import prepare_forecast_data from its new home in preprocessing
-from src.preprocessing.aviation import prepare_forecast_data  # noqa: F401
+import pandas as pd
 
 
-# ═══════════════════════════════════════════════════════════════
-# RAMADAN + HOLIDAY CALENDAR
-# ═══════════════════════════════════════════════════════════════
-
-def get_dubai_holidays() -> pd.DataFrame:
-    """Ramadan, Eid, and Dubai high-season holidays."""
-    ramadan = pd.DataFrame({
-        "holiday": "ramadan",
-        "ds": pd.to_datetime([
-            "2019-05-06", "2020-04-24", "2021-04-13", "2022-04-02",
-            "2023-03-23", "2024-03-12", "2025-03-01", "2026-02-18",
-        ]),
-        "lower_window": -7,
-        "upper_window": 35,
-    })
-
-    eid = pd.DataFrame({
-        "holiday": "eid_al_fitr",
-        "ds": pd.to_datetime([
-            "2019-06-04", "2020-05-24", "2021-05-13", "2022-05-02",
-            "2023-04-21", "2024-04-10", "2025-03-31", "2026-03-20",
-        ]),
-        "lower_window": -3,
-        "upper_window": 7,
-    })
-
-    nye = pd.DataFrame({
-        "holiday": "nye_dubai_season",
-        "ds": pd.to_datetime([f"{y}-12-20" for y in range(2019, 2027)]),
-        "lower_window": -5,
-        "upper_window": 15,
-    })
-
-    return pd.concat([ramadan, eid, nye], ignore_index=True)
+@dataclass
+class ForecastResult:
+    model_name: str
+    train_end: pd.Timestamp
+    test_start: pd.Timestamp
+    test_end: pd.Timestamp
+    metrics: dict
+    predictions: pd.DataFrame
 
 
-# ═══════════════════════════════════════════════════════════════
-# PROPHET MODEL
-# ═══════════════════════════════════════════════════════════════
+def _validate_ts(df: pd.DataFrame, date_col: str, y_col: str) -> pd.DataFrame:
+    out = df.copy()
+    out[date_col] = pd.to_datetime(out[date_col], errors="coerce")
+    out[y_col] = pd.to_numeric(out[y_col], errors="coerce")
 
-def train_prophet_model(
+    out = out.dropna(subset=[date_col]).sort_values(date_col)
+    out = out[[date_col, y_col]].drop_duplicates(subset=[date_col]).reset_index(drop=True)
+
+    if out.empty:
+        raise ValueError("Time series is empty after parsing.")
+    return out
+
+
+def to_monthly_series(
     df: pd.DataFrame,
-    regressor_cols: Optional[list[str]] = None,
-    test_months: int = 6,
-    forecast_months: int = 12,
-) -> dict:
-    """Train Prophet with holidays + supply/demand regressors."""
-    from prophet import Prophet
-
-    if regressor_cols is None:
-        regressor_cols = [c for c in df.columns
-                         if c.startswith("trend_") or c in ["supply_flights", "load_factor"]]
-
-    train = df.iloc[:-test_months].copy()
-    test = df.iloc[-test_months:].copy()
-
-    print(f"Prophet — Train: {len(train)} months, Test: {len(test)} months")
-    print(f"  Regressors: {regressor_cols}")
-
-    model = Prophet(
-        yearly_seasonality=True,
-        weekly_seasonality=False,
-        daily_seasonality=False,
-        changepoint_prior_scale=0.05,
-        seasonality_prior_scale=10,
-        holidays_prior_scale=10,
-        interval_width=0.95,
-    )
-    model.holidays = get_dubai_holidays()
-
-    for col in regressor_cols:
-        model.add_regressor(col, standardize=True)
-
-    model.fit(train)
-
-    future = model.make_future_dataframe(periods=test_months + forecast_months, freq="MS")
-
-    for col in regressor_cols:
-        future = future.merge(df[["ds", col]], on="ds", how="left")
-        future[col] = future[col].ffill().bfill()
-
-    forecast = model.predict(future)
-
-    test_mask = forecast["ds"].isin(test["ds"])
-    pred = forecast[test_mask].set_index("ds")["yhat"]
-    actual = test.set_index("ds")["y"]
-    common = actual.index.intersection(pred.index)
-
-    if len(common) > 0:
-        mae = mean_absolute_error(actual[common], pred[common])
-        mape = mean_absolute_percentage_error(actual[common], pred[common])
-    else:
-        mae, mape = np.nan, np.nan
-
-    print(f"\n  MAE: {mae:,.0f}  |  MAPE: {mape:.1%}")
-
-    return {
-        "model": model,
-        "forecast": forecast,
-        "metrics": {"mae": mae, "mape": mape, "mape_pct": mape * 100 if not np.isnan(mape) else np.nan},
-        "train": train,
-        "test": test,
-    }
-
-
-# ═══════════════════════════════════════════════════════════════
-# SARIMA BASELINE
-# ═══════════════════════════════════════════════════════════════
-
-def train_sarima_model(
-    df: pd.DataFrame,
-    order: tuple = (1, 1, 1),
-    seasonal_order: tuple = (1, 1, 1, 12),
-    test_months: int = 6,
-) -> dict:
-    """SARIMA baseline with monthly seasonality (s=12)."""
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-
-    train = df.iloc[:-test_months].copy()
-    test = df.iloc[-test_months:].copy()
-
-    print(f"SARIMA{order}x{seasonal_order} — Train: {len(train)}, Test: {len(test)}")
-
-    model = SARIMAX(train["y"], order=order, seasonal_order=seasonal_order,
-                    enforce_stationarity=False, enforce_invertibility=False)
-    fitted = model.fit(disp=False, maxiter=500)
-
-    forecast = fitted.forecast(steps=test_months)
-    mae = mean_absolute_error(test["y"], forecast)
-    mape = mean_absolute_percentage_error(test["y"], forecast)
-
-    print(f"  MAE: {mae:,.0f}  |  MAPE: {mape:.1%}  |  AIC: {fitted.aic:.0f}")
-
-    return {
-        "model": fitted,
-        "forecast": forecast,
-        "metrics": {"mae": mae, "mape": mape, "mape_pct": mape * 100},
-        "aic": fitted.aic,
-        "train": train,
-        "test": test,
-    }
-
-
-# ═══════════════════════════════════════════════════════════════
-# SEARCH -> DEMAND LAG ANALYSIS
-# ═══════════════════════════════════════════════════════════════
-
-def analyze_search_demand_lag(
-    merged_df: pd.DataFrame,
-    search_col: str,
-    demand_col: str = "y",
-    max_lag: int = 6,
+    date_col: str = "DATE",
+    y_col: str = "VALUE",
+    agg: str = "mean",
 ) -> pd.DataFrame:
-    """Test if Google Trends leads passenger demand by 0-N months."""
-    from scipy.stats import pearsonr
+    """
+    Convert raw timestamp data into monthly series at month-start frequency (MS).
+    """
+    out = _validate_ts(df, date_col, y_col).set_index(date_col)
 
-    results = []
-    for lag in range(0, max_lag + 1):
-        shifted = merged_df[search_col].shift(lag)
-        valid = pd.DataFrame({"search": shifted, "demand": merged_df[demand_col]}).dropna()
+    if agg == "sum":
+        monthly = out[y_col].resample("MS").sum()
+    else:
+        monthly = out[y_col].resample("MS").mean()
 
-        if len(valid) < 5:
-            continue
-
-        corr, p = pearsonr(valid["search"], valid["demand"])
-        results.append({
-            "lag_months": lag,
-            "description": f"Search leads by {lag} month(s)" if lag > 0 else "Same month",
-            "correlation": round(corr, 4),
-            "p_value": round(p, 4),
-            "significant": p < 0.05,
-            "n": len(valid),
-        })
-
-    lag_df = pd.DataFrame(results)
-    if not lag_df.empty:
-        best = lag_df.loc[lag_df["correlation"].abs().idxmax()]
-        print(f"Best lag: {best['lag_months']} month(s) (r={best['correlation']}, p={best['p_value']})")
-    return lag_df
+    monthly = monthly.interpolate(limit_direction="both")
+    monthly = monthly.reset_index().rename(columns={y_col: "Y"})
+    return monthly
 
 
-# ═══════════════════════════════════════════════════════════════
-# PUSH TIMING RECOMMENDATIONS
-# ═══════════════════════════════════════════════════════════════
+def train_test_split_time(
+    monthly_df: pd.DataFrame,
+    test_periods: int = 12,
+    date_col: str = "DATE",
+    y_col: str = "Y",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if len(monthly_df) <= test_periods + 6:
+        raise ValueError("Not enough history for stable split.")
 
-def generate_push_timing(forecast: pd.DataFrame, lead_months: int = 3) -> pd.DataFrame:
-    """When should an OTA start pushing Dubai inventory?"""
-    future = forecast[forecast["ds"] > pd.Timestamp.now()].copy()
-    if future.empty:
-        return pd.DataFrame()
+    df = monthly_df.copy()
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df.sort_values(date_col).reset_index(drop=True)
 
-    threshold = future["yhat"].quantile(0.75)
-    peaks = future[future["yhat"] >= threshold].copy()
-    peaks["PUSH_START"] = peaks["ds"] - pd.DateOffset(months=lead_months)
-    peaks["PUSH_END"] = peaks["ds"] - pd.DateOffset(months=1)
+    train = df.iloc[:-test_periods].copy()
+    test = df.iloc[-test_periods:].copy()
+    return train, test
 
-    def season(dt):
-        m = dt.month
-        if m in [12, 1, 2]: return "Winter Peak (NYE/Dubai Season)"
-        elif m in [3, 4, 5]: return "Spring (Post-Ramadan)"
-        elif m in [6, 7, 8]: return "Summer Low"
-        else: return "Fall Kickoff"
 
-    peaks["SEASON"] = peaks["ds"].apply(season)
-    peaks["RECOMMENDATION"] = peaks.apply(
-        lambda r: f"Push inventory {r['PUSH_START'].strftime('%b %Y')}-"
-                  f"{r['PUSH_END'].strftime('%b %Y')} -> peak {r['ds'].strftime('%b %Y')} "
-                  f"({r['yhat']:,.0f} est. passengers). {r['SEASON']}.",
-        axis=1,
+def _safe_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    denom = np.where(np.abs(y_true) < 1e-9, 1.0, np.abs(y_true))
+    return float(np.mean(np.abs((y_true - y_pred) / denom)) * 100)
+
+
+def evaluate_forecast(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    mae = float(np.mean(np.abs(y_true - y_pred)))
+    rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+    mape = _safe_mape(y_true, y_pred)
+
+    return {"MAE": round(mae, 4), "RMSE": round(rmse, 4), "MAPE": round(mape, 4)}
+
+
+def forecast_naive(train: pd.DataFrame, test: pd.DataFrame, y_col: str = "Y") -> np.ndarray:
+    last = float(train[y_col].iloc[-1])
+    return np.full(len(test), last)
+
+
+def forecast_seasonal_naive(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    season_length: int = 12,
+    y_col: str = "Y",
+) -> np.ndarray:
+    if len(train) < season_length:
+        return forecast_naive(train, test, y_col=y_col)
+
+    hist = train[y_col].values
+    preds = []
+    for i in range(len(test)):
+        idx = len(hist) - season_length + (i % season_length)
+        preds.append(float(hist[idx]))
+    return np.array(preds)
+
+
+def forecast_linear_trend(train: pd.DataFrame, test: pd.DataFrame, y_col: str = "Y") -> np.ndarray:
+    y = train[y_col].values.astype(float)
+    x = np.arange(len(y), dtype=float)
+
+    # Simple OLS via polyfit (degree 1)
+    slope, intercept = np.polyfit(x, y, 1)
+    x_future = np.arange(len(y), len(y) + len(test), dtype=float)
+    pred = intercept + slope * x_future
+    return pred.astype(float)
+
+
+def run_forecast_benchmarks(
+    monthly_df: pd.DataFrame,
+    date_col: str = "DATE",
+    y_col: str = "Y",
+    test_periods: int = 12,
+) -> dict[str, ForecastResult]:
+    train, test = train_test_split_time(
+        monthly_df.rename(columns={date_col: "DATE", y_col: "Y"}),
+        test_periods=test_periods,
+        date_col="DATE",
+        y_col="Y",
     )
 
-    return peaks[["ds", "yhat", "yhat_lower", "yhat_upper",
-                   "PUSH_START", "PUSH_END", "SEASON", "RECOMMENDATION"]].rename(
-        columns={"ds": "PEAK_MONTH", "yhat": "FORECAST_PAX"}
-    ).reset_index(drop=True)
+    models = {
+        "naive": forecast_naive(train, test, y_col="Y"),
+        "seasonal_naive": forecast_seasonal_naive(train, test, season_length=12, y_col="Y"),
+        "linear_trend": forecast_linear_trend(train, test, y_col="Y"),
+    }
+
+    out = {}
+    for name, pred in models.items():
+        metrics = evaluate_forecast(test["Y"].values, pred)
+        pred_df = test[["DATE"]].copy()
+        pred_df["ACTUAL"] = test["Y"].values
+        pred_df["PRED"] = pred
+        pred_df["RESIDUAL"] = pred_df["ACTUAL"] - pred_df["PRED"]
+
+        out[name] = ForecastResult(
+            model_name=name,
+            train_end=pd.Timestamp(train["DATE"].max()),
+            test_start=pd.Timestamp(test["DATE"].min()),
+            test_end=pd.Timestamp(test["DATE"].max()),
+            metrics=metrics,
+            predictions=pred_df,
+        )
+    return out
 
 
-def compare_models(prophet_res: dict, sarima_res: dict) -> pd.DataFrame:
-    comparison = pd.DataFrame([
-        {"Model": "Prophet (holidays + regressors)", "MAE": prophet_res["metrics"]["mae"],
-         "MAPE%": prophet_res["metrics"]["mape_pct"]},
-        {"Model": "SARIMA (baseline)", "MAE": sarima_res["metrics"]["mae"],
-         "MAPE%": sarima_res["metrics"]["mape_pct"], "AIC": sarima_res["aic"]},
-    ])
-    winner = "Prophet" if prophet_res["metrics"]["mape"] < sarima_res["metrics"]["mape"] else "SARIMA"
-    print(f"\nWinner: {winner}")
-    print(comparison.to_string(index=False))
-    return comparison
-
-
-# ═══════════════════════════════════════════════════════════════
-# CLI TEST
-# ═══════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    print("Demand Forecaster — Full Pipeline Test")
-    print("=" * 50)
-
-    # Load seed data instead of generating synthetic
-    seeds_dir = Path("data/seeds")
-    capacity = pd.read_parquet(seeds_dir / "aviation_capacity.parquet")
-    trends = pd.read_parquet(seeds_dir / "google_trends.parquet")
-
-    prophet_df = prepare_forecast_data(capacity, trends)
-
-    print("\n--- Prophet ---")
-    p_res = train_prophet_model(prophet_df, test_months=6, forecast_months=12)
-
-    print("\n--- SARIMA ---")
-    s_res = train_sarima_model(prophet_df, test_months=6)
-
-    compare_models(p_res, s_res)
-
-    print("\n--- Push Timing ---")
-    recs = generate_push_timing(p_res["forecast"])
-    if not recs.empty:
-        print(recs[["PEAK_MONTH", "FORECAST_PAX", "PUSH_START", "SEASON"]].to_string(index=False))
+def best_model_summary(results: dict[str, ForecastResult], metric: str = "RMSE") -> pd.DataFrame:
+    rows = []
+    for k, v in results.items():
+        row = {"MODEL": k}
+        row.update(v.metrics)
+        rows.append(row)
+    df = pd.DataFrame(rows).sort_values(metric, ascending=True).reset_index(drop=True)
+    return df

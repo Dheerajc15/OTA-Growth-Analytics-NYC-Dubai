@@ -1,238 +1,107 @@
-"""
-Aviation Edge API Client 
-==========================================
 
-Provides:
-  - Flight routes: which airlines fly JFK/EWR -> DXB, frequency
-  - Flight schedules/timetables: departure times, days of week
-  - Airline database: carrier details
-"""
+from __future__ import annotations
 
-import requests
-import pandas as pd
-import numpy as np
-import json
-import time
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
+import requests
+
 try:
     from config.settings import (
-        AVIATION_EDGE_API_KEY, AVIATION_EDGE_BASE_URL,
-        AVIATION_EDGE_ENDPOINTS, DATA_RAW,
-        ORIGIN_AIRPORTS, DESTINATION_AIRPORT,
+        AVIATION_EDGE_API_KEY, AVIATION_EDGE_BASE_URL, AVIATION_EDGE_ENDPOINTS,
+        ORIGIN_AIRPORTS, DESTINATION_AIRPORT, DATA_RAW
     )
 except ImportError:
     AVIATION_EDGE_API_KEY = None
     AVIATION_EDGE_BASE_URL = "https://aviation-edge.com/v2/public"
-    AVIATION_EDGE_ENDPOINTS = {
-        "routes": "/routes",
-        "timetable": "/timetable",
-        "airlines": "/airlineDatabase",
-        "airports": "/airportDatabase",
-    }
-    DATA_RAW = Path("data/raw")
+    AVIATION_EDGE_ENDPOINTS = {"routes": "/routes", "flights": "/flights"}
     ORIGIN_AIRPORTS = ["JFK", "EWR", "LGA"]
     DESTINATION_AIRPORT = "DXB"
+    DATA_RAW = Path("data/raw")
 
 
-# ═══════════════════════════════════════════════════════════════
-# API HELPERS
-# ═══════════════════════════════════════════════════════════════
-
-def _make_request(endpoint: str, params: dict) -> Optional[list]:
-    """Make authenticated request to Aviation Edge API."""
+def _check_key() -> bool:
     if not AVIATION_EDGE_API_KEY:
-        print("AVIATION_EDGE_API_KEY not set in .env")
-        return None
+        print("⚠️ AVIATION_EDGE_API_KEY not set")
+        return False
+    return True
 
+
+def _safe_get(endpoint: str, params: dict) -> list | dict:
     url = f"{AVIATION_EDGE_BASE_URL}{endpoint}"
-    params["key"] = AVIATION_EDGE_API_KEY
-
     try:
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-
-        if isinstance(data, dict) and "error" in data:
-            print(f"API error: {data['error']}")
-            return None
-
-        return data if isinstance(data, list) else [data]
-    except requests.exceptions.RequestException as e:
-        print(f"Request failed: {e}")
-        return None
+        r = requests.get(url, params=params, timeout=30)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        print(f"API error {endpoint}: {e}")
+        return []
 
 
-# ═══════════════════════════════════════════════════════════════
-# ROUTE DATA — Which airlines fly NYC -> DXB
-# ═══════════════════════════════════════════════════════════════
-
-def fetch_routes(
-    origins: Optional[list[str]] = None,
-    destination: Optional[str] = None,
-) -> pd.DataFrame:
-    """Fetch airline routes from NYC airports to Dubai."""
-    origins = origins or ORIGIN_AIRPORTS
-    destination = destination or DESTINATION_AIRPORT
-
-    all_routes = []
-    for origin in origins:
-        print(f"  Fetching routes: {origin} -> {destination}")
-        data = _make_request(
-            AVIATION_EDGE_ENDPOINTS["routes"],
-            {"departureIata": origin, "arrivalIata": destination},
-        )
-        if data:
-            for route in data:
-                route["queried_origin"] = origin
-            all_routes.extend(data)
-            print(f"    Got {len(data)} route(s)")
-        else:
-            print(f"    No data / API error")
-        time.sleep(1)
-
-    if not all_routes:
+def fetch_routes_data(limit: int = 5000) -> pd.DataFrame:
+    if not _check_key():
         return pd.DataFrame()
 
-    df = pd.DataFrame(all_routes)
-    print(f"Total routes: {len(df)}")
-    return df
+    endpoint = AVIATION_EDGE_ENDPOINTS.get("routes", "/routes")
+    payload = _safe_get(endpoint, {"key": AVIATION_EDGE_API_KEY, "limit": limit})
 
-
-# ═══════════════════════════════════════════════════════════════
-# TIMETABLE — Flight schedules
-# ═══════════════════════════════════════════════════════════════
-
-def fetch_timetable(
-    origin: str = "JFK",
-    destination: str = None,
-    timetable_type: str = "departure",
-) -> pd.DataFrame:
-    """Fetch flight timetable (schedules) from an airport."""
-    destination = destination or DESTINATION_AIRPORT
-
-    print(f"Fetching timetable: {origin} departures to {destination}")
-    data = _make_request(
-        AVIATION_EDGE_ENDPOINTS["timetable"],
-        {"iataCode": origin, "type": timetable_type},
-    )
-
-    if not data:
+    if not isinstance(payload, list):
         return pd.DataFrame()
 
-    records = []
-    for flight in data:
-        try:
-            record = {
-                "flight_iata": flight.get("flight", {}).get("iataNumber", ""),
-                "airline_iata": flight.get("airline", {}).get("iataCode", ""),
-                "airline_name": flight.get("airline", {}).get("name", ""),
-                "departure_airport": flight.get("departure", {}).get("iataCode", ""),
-                "departure_scheduled": flight.get("departure", {}).get("scheduledTime", ""),
-                "departure_terminal": flight.get("departure", {}).get("terminal", ""),
-                "arrival_airport": flight.get("arrival", {}).get("iataCode", ""),
-                "arrival_scheduled": flight.get("arrival", {}).get("scheduledTime", ""),
-                "arrival_terminal": flight.get("arrival", {}).get("terminal", ""),
-                "status": flight.get("status", ""),
-                "aircraft_iata": flight.get("aircraft", {}).get("iataCode", ""),
-            }
-            records.append(record)
-        except (KeyError, TypeError):
-            continue
-
-    df = pd.DataFrame(records)
-
-    if destination and "arrival_airport" in df.columns:
-        df = df[df["arrival_airport"] == destination]
-
-    print(f"Timetable: {len(df)} flights ({origin} -> {destination})")
-    return df
-
-
-# ═══════════════════════════════════════════════════════════════
-# AGGREGATE: ALL NYC -> DXB FLIGHT DATA
-# ═══════════════════════════════════════════════════════════════
-
-def fetch_all_nyc_dubai_flights() -> pd.DataFrame:
-    """Fetch timetables from all NYC airports to DXB and combine."""
-    all_flights = []
-    for origin in ORIGIN_AIRPORTS:
-        flights = fetch_timetable(origin=origin)
-        if not flights.empty:
-            all_flights.append(flights)
-        time.sleep(2)
-
-    if not all_flights:
-        print("No flight data retrieved for any NYC airport.")
-        return pd.DataFrame()
-
-    combined = pd.concat(all_flights, ignore_index=True)
-    print(f"Combined: {len(combined)} flights across {len(all_flights)} airports")
-    return combined
-
-
-def compute_flight_frequency(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute daily/weekly flight frequency by airline for demand analysis."""
+    df = pd.DataFrame(payload)
     if df.empty:
         return df
 
-    freq = (
-        df.groupby(["departure_airport", "airline_iata", "airline_name"])
-        .agg(
-            num_flights=("flight_iata", "count"),
-            unique_flights=("flight_iata", "nunique"),
-        )
-        .reset_index()
-        .sort_values("num_flights", ascending=False)
-    )
+    origin_candidates = ["departureIata", "departure", "from"]
+    dest_candidates = ["arrivalIata", "arrival", "to"]
+    o_col = next((c for c in origin_candidates if c in df.columns), None)
+    d_col = next((c for c in dest_candidates if c in df.columns), None)
 
-    freq["market_share_pct"] = (
-        freq["num_flights"] / freq["num_flights"].sum() * 100
-    ).round(2)
+    if o_col and d_col:
+        df = df[df[o_col].isin(ORIGIN_AIRPORTS) & (df[d_col] == DESTINATION_AIRPORT)].copy()
 
-    return freq
+    return df.reset_index(drop=True)
 
 
-# ═══════════════════════════════════════════════════════════════
-# SAVE / LOAD
-# ═══════════════════════════════════════════════════════════════
+def fetch_aviation_data() -> pd.DataFrame:
+    """
+    Canonical fetch function used by notebooks.
+    Returns monthly proxy if route list available.
+    """
+    routes = fetch_routes_data()
+    if routes.empty:
+        return pd.DataFrame()
 
-def save_aviation_data(df: pd.DataFrame, filename: str) -> Path:
-    output_dir = DATA_RAW / "aviation_edge"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / filename
+    start = pd.Timestamp("2019-01-01")
+    end = pd.Timestamp.today().normalize()
+    months = pd.date_range(start=start, end=end, freq="MS")
+
+    n_routes = max(len(routes), 1)
+    out = pd.DataFrame({"DATE": months})
+    out["MONTHLY_FLIGHTS"] = (n_routes * 25).astype(int)
+    out["EST_PASSENGERS"] = (out["MONTHLY_FLIGHTS"] * 280 * 0.78).astype(int)
+    out["LOAD_FACTOR"] = 0.78
+    return out
+
+
+# Backward-compatible aliases
+fetch_route_data = fetch_routes_data
+fetch_routes = fetch_routes_data
+
+
+def save_aviation_data(df: pd.DataFrame, name: str = "monthly_capacity") -> Path:
+    out_dir = DATA_RAW / "aviation_edge"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{name}.csv"
     df.to_csv(path, index=False)
-    print(f"Saved -> {path}")
+    print(f"Saved → {path}")
     return path
 
 
-def load_aviation_data(filename: str) -> pd.DataFrame:
-    path = DATA_RAW / "aviation_edge" / filename
+def load_aviation_data(name: str = "monthly_capacity") -> pd.DataFrame:
+    path = DATA_RAW / "aviation_edge" / f"{name}.csv"
     if not path.exists():
         raise FileNotFoundError(f"Not found: {path}")
-    return pd.read_csv(path)
+    return pd.read_csv(path, parse_dates=["DATE"])
 
-
-# ═══════════════════════════════════════════════════════════════
-# CLI TEST
-# ═══════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    print("Aviation Edge API — Test")
-    print("=" * 40)
-
-    if AVIATION_EDGE_API_KEY:
-        print("API key found — fetching live data...\n")
-        routes = fetch_routes()
-        if not routes.empty:
-            save_aviation_data(routes, "routes_nyc_dxb.csv")
-
-        flights = fetch_all_nyc_dubai_flights()
-        if not flights.empty:
-            save_aviation_data(flights, "flights_nyc_dxb.csv")
-            freq = compute_flight_frequency(flights)
-            print("\nAirline Frequency:")
-            print(freq.to_string(index=False))
-    else:
-        print("No API key. Run: python scripts/generate_seeds.py")
