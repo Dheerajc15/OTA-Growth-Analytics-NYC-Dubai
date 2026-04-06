@@ -1,26 +1,23 @@
-"""
-Trends Preprocessing
-=====================
-Resample weekly Google Trends to monthly and apply cleaning.
-"""
+from __future__ import annotations
 
 import pandas as pd
 
 
-def resample_trends_monthly(df: pd.DataFrame) -> pd.DataFrame:
-    """Resample weekly trends to monthly (mean) for merging with Aviation Edge."""
-    monthly = df.resample("MS").mean().round(1)
-    monthly.index.name = "DATE"
-    return monthly
-
-
 def clean_trends(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ensure index is DatetimeIndex, drop fully-null rows,
-    and forward-fill small gaps (up to 2 weeks).
-    """
     out = df.copy()
-    out.index = pd.to_datetime(out.index)
+    if "DATE" in out.columns:
+        out["DATE"] = pd.to_datetime(out["DATE"], errors="coerce")
+        out = out.dropna(subset=["DATE"]).set_index("DATE")
+    else:
+        out.index = pd.to_datetime(out.index, errors="coerce")
+
     out = out.dropna(how="all")
     out = out.ffill(limit=2)
     return out
+
+
+def resample_trends_monthly(df: pd.DataFrame) -> pd.DataFrame:
+    out = clean_trends(df)
+    monthly = out.resample("MS").mean().round(1)
+    monthly.index.name = "DATE"
+    return monthly
