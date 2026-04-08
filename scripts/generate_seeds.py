@@ -1,16 +1,3 @@
-"""
-Generate deterministic seed data fixtures.
-===========================================
-Run:  python scripts/generate_seeds.py
-      python scripts/generate_seeds.py --format csv  
-
-Writes to data/seeds/*.parquet (or .csv).
-"""
-
-"""
-Generate deterministic seed data fixtures.
-Run:  python scripts/generate_seeds.py
-"""
 
 import argparse
 import sys
@@ -19,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Ensure project root is on sys.path so config.settings is importable
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
